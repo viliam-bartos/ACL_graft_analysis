@@ -1,0 +1,2 @@
+Fold 0 Best Dice: 0.8558
+Epochs trained: 500

@@ -1,0 +1,8 @@
+data_train/
+dataset_split/
+puvodni_mr_data/
+labels/
+__pycache__/
+.venv/
+.vscode/
+.idea/

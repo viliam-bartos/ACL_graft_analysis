@@ -1,0 +1,7 @@
+Training completed
+Start: 2025-12-30 20:12:01.275724
+End: 2025-12-30 20:43:50.933678
+Duration: 0:31:49.657954
+Best Val Loss: 0.2332
+Final Train Loss: 0.1406
+Total Epochs: 150
