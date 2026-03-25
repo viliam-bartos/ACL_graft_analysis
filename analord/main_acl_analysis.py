@@ -232,7 +232,16 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx):
         if i == 0: 
             ref_edge = (tuple(grid_origin), tuple(grid_origin + grid_length * v_long))
             
-    return {'lines': grid_lines, 'ref_edge': ref_edge, 'blum_line': blum_line}
+    return {
+        'lines': grid_lines, 
+        'ref_edge': ref_edge, 
+        'blum_line': blum_line,
+        'grid_origin': grid_origin,
+        'v_long': v_long,
+        'v_short': v_short,
+        'grid_length': grid_length,
+        'grid_depth': grid_depth
+    }
 
 
 def extract_footprints(mask_array, spacing):
@@ -262,8 +271,40 @@ def extract_footprints(mask_array, spacing):
     femur_centroid_phys = (fem_z * sz, fem_y * sy, fem_x * sx)
     tibia_centroid_phys = (tib_z * sz, tib_y * sy, tib_x * sx)
     
+    # Výpočet B&H procent
+    bh_grid_info['bh_length_pct'] = np.nan
+    bh_grid_info['bh_depth_pct'] = np.nan
+    
+    if bh_grid_info and 'grid_origin' in bh_grid_info:
+        g_orig = bh_grid_info['grid_origin']
+        v_l = bh_grid_info['v_long']
+        v_s = bh_grid_info['v_short']
+        g_len = bh_grid_info['grid_length']
+        g_dep = bh_grid_info['grid_depth']
+        
+        vec_to_cent = np.array(femur_centroid_phys) - g_orig
+        
+        proj_l = np.dot(vec_to_cent, v_l)
+        proj_s = np.dot(vec_to_cent, v_s)
+        
+        if g_len > 0:
+            raw_length_pct = (proj_l / g_len) * 100.0
+            
+            # Anatomický kompas: Vektor úponů ukazuje z femuru na tibii (směřuje anteriorně)
+            acl_vec = np.array(tibia_centroid_phys) - np.array(femur_centroid_phys)
+            
+            # Skalární součin zjistí, zda v_long směřuje také dopředu
+            if np.dot(v_l, acl_vec) > 0:
+                # Mřížka začíná vzadu a jde dopředu. Výpočet z počátku je správný.
+                bh_grid_info['bh_length_pct'] = raw_length_pct
+            else:
+                # Mřížka začíná vpředu a jde dozadu. Procenta odečteme od 100.
+                bh_grid_info['bh_length_pct'] = 100.0 - raw_length_pct
+                
+        if g_dep > 0:
+            bh_grid_info['bh_depth_pct'] = (proj_s / g_dep) * 100.0
+            
     return femur_centroid_phys, tibia_centroid_phys, bh_grid_info
-
 # =============================================================================
 # Module 3: ACL Vector and Orientation Analysis
 # =============================================================================
@@ -457,7 +498,13 @@ def run_analysis(img_path, ref_path, mask_path):
     # Module 5
     radiomics_features = extract_radiomics(std_img_sitk, mask_sitk)
     
+    # Vytáhnutí procent z mřížky
+    bh_len_pct = bh_grid_info.get('bh_length_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
+    bh_dep_pct = bh_grid_info.get('bh_depth_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
+
     results_dict = {
+        "BH_Length_pct": bh_len_pct,
+        "BH_Depth_pct": bh_dep_pct,
         "angle_to_plateau_deg": orientation_metrics.get("angle_to_plateau_deg", np.nan),
         "sagittal_angle_deg": orientation_metrics.get("sagittal_angle_deg", np.nan),
         "coronal_angle_deg": orientation_metrics.get("coronal_angle_deg", np.nan),

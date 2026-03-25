@@ -28,4 +28,4 @@ def run_pipeline(mri_path, mask_path):
 
 if __name__ == "__main__":
     # Ukázka volání (změňte dle potřeby)
-    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_002.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\LABELS_TRAIN\mask_case_002.nii.gz")
+    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_003.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\LABELS_TRAIN\mask_case_003.nii.gz")
