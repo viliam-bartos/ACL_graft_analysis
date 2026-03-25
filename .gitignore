@@ -6,3 +6,7 @@ __pycache__/
 .venv/
 .vscode/
 .idea/
+results_3D/
+vysledky_modelu/
+*.nii.gz
+*.csv
