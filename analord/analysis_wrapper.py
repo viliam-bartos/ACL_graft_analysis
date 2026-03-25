@@ -20,7 +20,8 @@ def run_pipeline(mri_path, mask_path):
         'tibial_centroid': t_centroid,
         'plateau_normal': plane_info['normal'],
         'plateau_center': plane_info['center'],
-        'bh_grid_info': plane_info.get('bh_grid_info', {})
+        'bh_grid_info': plane_info.get('bh_grid_info', {}),
+        'att_info': plane_info.get('att_info', {})
     }
     
     # 3. Předá data do PyVisty (zde se script pozastaví a vykreslí přesný matematický model, dokud okno nezavřeš)
@@ -28,4 +29,4 @@ def run_pipeline(mri_path, mask_path):
 
 if __name__ == "__main__":
     # Ukázka volání (změňte dle potřeby)
-    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_003.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\LABELS_TRAIN\mask_case_003.nii.gz")
+    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_045.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\LABELS_TRAIN\mask_case_045.nii.gz")

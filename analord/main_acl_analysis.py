@@ -104,19 +104,23 @@ def get_tibial_plateau_plane(tibia_mask, spacing):
         
     return normal, centroid
 
-def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx):
+def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_center_dim0=None):
     sz, sy, sx = spacing_zyx
     f_dim0, f_dim1, f_dim2 = fem_vox
     t_dim0, t_dim1, t_dim2 = tib_vox
     
-    # 1. Posun o 10 voxelů mediálně
-    direction = np.sign(t_dim0 - f_dim0)
-    if direction == 0: direction = 1
-    
-    slice_dim0 = int(np.round(f_dim0 + 10 * direction))
+    # 1. Dynamický posun do středu fossy (podle těžiště ACL)
+    if acl_center_dim0 is not None and not np.isnan(acl_center_dim0):
+        slice_dim0 = int(np.round(acl_center_dim0))
+    else:
+        # Fallback, pokud by těžiště ACL z nějakého důvodu selhalo
+        direction = np.sign(t_dim0 - f_dim0)
+        if direction == 0: direction = 1
+        slice_dim0 = int(np.round(f_dim0 + 10 * direction))
+        
     slice_dim0 = np.clip(slice_dim0, 0, femur_mask.shape[0] - 1)
     
-    # 2. Extrakce sagitálního řezu
+    # 2. Extrakce sagitálního řezu uprostřed fossy
     sag_slice = femur_mask[slice_dim0, :, :]
     
     y_c = int(f_dim1) 
@@ -255,16 +259,20 @@ def extract_footprints(mask_array, spacing):
     femoral_contact = acl_dilated & femur_mask
     tibial_contact = acl_dilated & tibia_mask
     
-    # Centroidy ve voxelových souřadnicích (dim0, dim1, dim2)
+    # Centroidy úponů ve voxelových souřadnicích
     fem_z, fem_y, fem_x = ndimage.center_of_mass(femoral_contact)
     tib_z, tib_y, tib_x = ndimage.center_of_mass(tibial_contact)
     
-    # Generování mřížky pomocí voxelových pozic k určení směru posunu
+    # Těžiště samotného vazu (pro nalezení středu fossy)
+    acl_z, acl_y, acl_x = ndimage.center_of_mass(acl_mask)
+    
+    # Generování mřížky s dynamickým řezem uprostřed vazu
     bh_grid_info = get_bernard_hertel_grid(
         femur_mask, 
         (fem_z, fem_y, fem_x), 
         (tib_z, tib_y, tib_x), 
-        spacing
+        spacing,
+        acl_center_dim0=acl_z
     )
     
     sz, sy, sx = spacing
@@ -374,7 +382,7 @@ def analyze_acl_orientation(femur_centroid, tibia_centroid, mask_array, spacing)
 # =============================================================================
 def analyze_spatial_relations(mask_array, spacing):
     """
-    Volume of ACL, Minimal Distance for Impingement, Notch Width heuristic.
+    Volume of ACL, Minimal Distance for Impingement, Exact Notch Width at ACL centroid.
     """
     logging.info("Starting Module 4: Spatial Relations & Impingement.")
     voxel_vol = spacing[0] * spacing[1] * spacing[2]
@@ -382,44 +390,53 @@ def analyze_spatial_relations(mask_array, spacing):
     acl_mask = (mask_array == 1)
     femur_mask = (mask_array == 2)
     
-    # 1. Volume
+    # 1. Objem
     acl_volume_mm3 = np.sum(acl_mask) * voxel_vol
     
-    # 2. Impingement Assessment (Minimal distance ACL to Femur notch roof)
-    # Calculate distance transform from the femur surface
+    # 2. Impingement Assessment (Vzdálenost ACL od femuru)
     inv_femur = ~femur_mask
     dist_map = ndimage.distance_transform_edt(inv_femur, sampling=spacing)
-    
-    # Since they are contiguous, the minimum distance is zero at the contact footprint.
-    # A reliable impingement distance should evaluate the upper third of the ACL (excluding footprint).
-    # For a general minimum distance of non-footprint ACL to femur:
     acl_distances = dist_map[acl_mask]
     min_dist_to_femur = acl_distances.min() if acl_distances.size > 0 else np.nan
     
-    # 3. Intercondylar Notch Width Heuristic
-    # Using the Z-level of the ACL centroid as the trajectory level
+    # 3. Exaktní šířka interkondylární fossy (Ray Casting)
     acl_centroid = ndimage.center_of_mass(acl_mask)
+    notch_width_mm = np.nan
+    
     if not np.isnan(acl_centroid[0]):
-        z_level = int(np.round(acl_centroid[0]))
-        femur_slice = femur_mask[z_level, :, :]
+        dim0_c = int(np.round(acl_centroid[0])) # Pravo-levá osa (R-L)
+        dim1_c = int(np.round(acl_centroid[1])) # Předozadní osa (A-P) / Superior-Inferior
+        dim2_c = int(np.round(acl_centroid[2]))
         
-        coords = np.argwhere(femur_slice)
-        if coords.size > 0:
-            # Extreme heuristic: measure bounding box width and assume notch is internal void
-            x_min, x_max = coords[:, 1].min(), coords[:, 1].max()
-            total_width = (x_max - x_min) * spacing[2]
-            notch_width_heuristic = total_width * 0.3 # Assumes notch ~30% width
-        else:
-            notch_width_heuristic = np.nan
-    else:
-        notch_width_heuristic = np.nan
-        
-    logging.info("[HEURISTIC NOTE] Reliable notch width calculation requires morphological tracing of condylar boundaries.")
-        
+        # Vyřízneme 1D paprsek napříč kolenem (R-L osa) přesně v úrovni těžiště ACL
+        # Fixujeme zbylé dvě osy, abychom stříleli rovně do stran
+        try:
+            rl_ray = femur_mask[:, dim1_c, dim2_c]
+            
+            # Hledáme hranice kosti směrem doleva a doprava od vazu
+            left_side = rl_ray[:dim0_c]
+            right_side = rl_ray[dim0_c:]
+            
+            left_hits = np.argwhere(left_side)
+            right_hits = np.argwhere(right_side)
+            
+            if len(left_hits) > 0 and len(right_hits) > 0:
+                # Nejbližší stěna zleva (poslední bod před vazem)
+                left_edge = left_hits[-1][0]
+                
+                # Nejbližší stěna zprava (první bod za vazem)
+                right_edge = right_hits[0][0] + dim0_c
+                
+                # Výpočet fyzické vzdálenosti v milimetrech (dim0 odpovídá spacing[0])
+                notch_width_mm = (right_edge - left_edge) * spacing[0]
+                
+        except IndexError:
+            logging.warning("Těžiště ACL je mimo masku femuru, nelze změřit šířku fossy.")
+            
     return {
         "acl_volume_mm3": acl_volume_mm3,
         "min_dist_to_femur_mm": min_dist_to_femur,
-        "notch_width_heuristic_mm": notch_width_heuristic
+        "notch_width_mm": notch_width_mm
     }
 
 # =============================================================================
@@ -464,6 +481,133 @@ def extract_radiomics(standardized_img_sitk, mask_sitk):
         return {}
 
 # =============================================================================
+# Module 6: Advanced Geometric Features (Tortuosity & ATT)
+# =============================================================================
+def calculate_tortuosity(acl_mask, femur_centroid, tibia_centroid, spacing):
+    """
+    Calculate the Tortuosity index of the ACL.
+    Returns ratio of curved path length to straight-line footprint distance.
+    """
+    logging.info("Starting Module 6: Advanced Geometric Features.")
+    logging.info("Calculating Tortuosity Index.")
+    if any(np.isnan(c) for c in femur_centroid) or any(np.isnan(c) for c in tibia_centroid):
+        return np.nan
+        
+    p_f = np.array(femur_centroid)
+    p_t = np.array(tibia_centroid)
+    straight_length = np.linalg.norm(p_f - p_t)
+    
+    if straight_length == 0:
+        return np.nan
+        
+    centroids_3d = []
+    # Find active slices along the primary axis component (usually dimension 1, Y-axis)
+    slice_indices = np.where(np.any(acl_mask, axis=(0, 2)))[0]
+    
+    for y in slice_indices:
+        slice_mask = acl_mask[:, y, :]
+        if np.sum(slice_mask) > 0:
+            coords = np.argwhere(slice_mask)
+            cz, cx = coords.mean(axis=0)
+            phys_z = cz * spacing[0]
+            phys_y = y * spacing[1]
+            phys_x = cx * spacing[2]
+            centroids_3d.append([phys_z, phys_y, phys_x])
+            
+    if len(centroids_3d) < 2:
+        return 1.0
+        
+    centroids_3d = np.array(centroids_3d)
+    centroids_3d = centroids_3d[np.argsort(centroids_3d[:, 1])]
+    
+    diffs = np.diff(centroids_3d, axis=0)
+    curved_length = np.sum(np.linalg.norm(diffs, axis=1))
+    
+    tortuosity = curved_length / straight_length
+    return max(1.0, float(tortuosity))
+
+def calculate_att(femur_mask, tibia_mask, spacing, plane_info, f_centroid, t_centroid):
+    """
+    Calculate Anterior Tibial Translation (ATT) in millimeters.
+    """
+    logging.info("Calculating Anterior Tibial Translation (ATT).")
+    if any(np.isnan(c) for c in f_centroid) or any(np.isnan(c) for c in t_centroid):
+        return np.nan, {}
+        
+    plane_normal = plane_info.get("normal", np.array([0.0, 1.0, 0.0]))
+    
+    # Estimate Anterior direction globally from footprints (Tibia is anterior to Femur)
+    acl_vec = np.array(t_centroid) - np.array(f_centroid)
+    
+    # Z-axis (dim 2) is historically A-P in these volumes
+    ap_global = np.array([0.0, 0.0, 1.0])
+    
+    # Align ap_global with the actual anterior direction 
+    if np.dot(ap_global, acl_vec) < 0:
+        ap_global = -ap_global
+        
+    # Project anterior vector onto the tibial plateau
+    dot_prod = np.dot(ap_global, plane_normal)
+    v_anterior = ap_global - dot_prod * plane_normal
+    
+    norm_v_ap = np.linalg.norm(v_anterior)
+    if norm_v_ap == 0:
+        v_anterior = ap_global 
+    else:
+        v_anterior = v_anterior / norm_v_ap
+        
+    sz, sy, sx = spacing
+    
+    # 1. Tibial posterior edge
+    tib_coords = np.argwhere(tibia_mask)
+    if len(tib_coords) == 0:
+        return np.nan, {}
+    tib_phys = tib_coords * np.array([sz, sy, sx])
+    tib_proj = np.dot(tib_phys, v_anterior)
+    tibia_idx = np.argmin(tib_proj)
+    tibia_posterior_edge = tib_proj[tibia_idx] # Minimum of anterior projection is posterior
+    tibia_pt = tib_phys[tibia_idx]
+    
+    # 2. Femoral posterior edge (lateral condyle only)
+    f_dim0 = int(np.round(f_centroid[0] / sz)) if sz > 0 else 0
+    t_dim0 = int(np.round(t_centroid[0] / sz)) if sz > 0 else 0
+    
+    lateral_dir = -np.sign(t_dim0 - f_dim0)
+    if lateral_dir == 0: lateral_dir = -1
+    
+    f_dim0 = np.clip(f_dim0, 0, femur_mask.shape[0] - 1)
+    
+    if lateral_dir > 0:
+        lateral_slab = femur_mask[f_dim0:, :, :]
+        coords_offset = np.array([f_dim0, 0, 0])
+    else:
+        lateral_slab = femur_mask[:f_dim0+1, :, :]
+        coords_offset = np.array([0, 0, 0])
+        
+    fem_coords = np.argwhere(lateral_slab)
+    if len(fem_coords) == 0:
+        return np.nan, {}
+        
+    fem_phys = (fem_coords + coords_offset) * np.array([sz, sy, sx])
+    fem_proj = np.dot(fem_phys, v_anterior)
+    femur_idx = np.argmin(fem_proj)
+    femur_posterior_edge = fem_proj[femur_idx]
+    femur_pt = fem_phys[femur_idx]
+    
+    # 3. Translation: Distance between tibial 'wall' and femoral 'wall'
+    # Positive ATT means tibia is more anterior than femur
+    att_mm = float(tibia_posterior_edge - femur_posterior_edge)
+    
+    debug_info = {
+        "tibia_pt": tibia_pt,
+        "femur_pt": femur_pt,
+        "v_anterior": v_anterior,
+        "plane_normal": plane_normal
+    }
+    
+    return att_mm, debug_info
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 def run_analysis(img_path, ref_path, mask_path):
@@ -498,11 +642,29 @@ def run_analysis(img_path, ref_path, mask_path):
     # Module 5
     radiomics_features = extract_radiomics(std_img_sitk, mask_sitk)
     
+    plane_info = {
+        "normal": orientation_metrics.get("plateau_normal", np.array([0.0, 1.0, 0.0])),
+        "center": orientation_metrics.get("plateau_center", np.array([0.0, 0.0, 0.0])),
+        "bh_grid_info": bh_grid_info
+    }
+    
+    # Module 6: Advanced Geometric Features
+    acl_mask = (mask_array == 1)
+    tortuosity_idx = calculate_tortuosity(acl_mask, f_centroid, t_centroid, spacing_zyx)
+    
+    femur_mask = (mask_array == 2)
+    tibia_mask = (mask_array == 3)
+    att_mm, att_debug_info = calculate_att(femur_mask, tibia_mask, spacing_zyx, plane_info, f_centroid, t_centroid)
+    
+    plane_info['att_info'] = att_debug_info
+    
     # Vytáhnutí procent z mřížky
     bh_len_pct = bh_grid_info.get('bh_length_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
     bh_dep_pct = bh_grid_info.get('bh_depth_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
 
     results_dict = {
+        "Tortuosity_Index": tortuosity_idx,
+        "ATT_mm": att_mm,
         "BH_Length_pct": bh_len_pct,
         "BH_Depth_pct": bh_dep_pct,
         "angle_to_plateau_deg": orientation_metrics.get("angle_to_plateau_deg", np.nan),
@@ -510,12 +672,6 @@ def run_analysis(img_path, ref_path, mask_path):
         "coronal_angle_deg": orientation_metrics.get("coronal_angle_deg", np.nan),
         **spatial_metrics,
         **radiomics_features
-    }
-    
-    plane_info = {
-        "normal": orientation_metrics.get("plateau_normal", np.array([0.0, 1.0, 0.0])),
-        "center": orientation_metrics.get("plateau_center", np.array([0.0, 0.0, 0.0])),
-        "bh_grid_info": bh_grid_info
     }
     
     return results_dict, mask_array, spacing_zyx, f_centroid, t_centroid, plane_info

@@ -85,9 +85,32 @@ def visualize_results(mask_data, spacing, vis_data):
     vector_line = pv.Line(dummy_femoral_centroid, dummy_tibial_centroid)
     
     # C. Tibial Plateau Plane
+    # To prevent PyVista from arbitrarily rotating the plane edges (creating a 'rhombus'), 
+    # we enforce the i_direction to be roughly the Left-Right axis (1, 0, 0), projected onto the plane.
+    temp_i = np.array([1.0, 0.0, 0.0])
+    temp_i_proj = temp_i - np.dot(temp_i, dummy_plateau_normal) * dummy_plateau_normal
+    if np.linalg.norm(temp_i_proj) > 0:
+        i_dir = temp_i_proj / np.linalg.norm(temp_i_proj)
+    else:
+        i_dir = np.array([0.0, 0.0, 1.0])
+        
+    j_dir = np.cross(dummy_plateau_normal, i_dir)
+    j_dir = j_dir / np.linalg.norm(j_dir)
+
     plateau_plane = pv.Plane(center=dummy_plateau_center, direction=dummy_plateau_normal,
-                             i_size=60, j_size=60, i_resolution=1, j_resolution=1)
+                             i_size=60, j_size=60, 
+                             i_resolution=1, j_resolution=1)
     
+    # In older PyVista versions, pv.Plane doesn't reliably accept i_direction/j_direction in kwargs.
+    # The safest way to orient the plane is to generate it at origin with Z normal, then transform it.
+    base_plane = pv.Plane(center=(0,0,0), direction=(0,0,1), i_size=60, j_size=60, i_resolution=1, j_resolution=1)
+    # Transformation matrix: Columns are i_dir, j_dir, normal, and the last column is the translation.
+    trans_matrix = np.eye(4)
+    trans_matrix[0:3, 0] = i_dir
+    trans_matrix[0:3, 1] = j_dir
+    trans_matrix[0:3, 2] = dummy_plateau_normal
+    trans_matrix[0:3, 3] = dummy_plateau_center
+    plateau_plane = base_plane.transform(trans_matrix)
     # D. Bernard & Hertel Grid
     bh_lines = []
     bh_grid_info = vis_data.get('bh_grid_info', {})
@@ -129,6 +152,36 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_blum_pt1 = pv.PolyData()
         actor_blum_pt2 = pv.PolyData()
 
+    # G. ATT Lines (Kolmice)
+    att_info = vis_data.get('att_info', {})
+    if att_info and 'tibia_pt' in att_info:
+        t_pt = att_info['tibia_pt']
+        f_pt = att_info['femur_pt']
+        v_ant = att_info['v_anterior']
+        n_p = att_info['plane_normal']
+        
+        # Osa kolmice k platu (nahoru/dolu podel normaly)
+        t_line_start = t_pt - 40 * n_p
+        t_line_end = t_pt + 40 * n_p
+        f_line_start = f_pt - 40 * n_p
+        f_line_end = f_pt + 40 * n_p
+        
+        actor_att_t_line = pv.Line(t_line_start, t_line_end)
+        actor_att_f_line = pv.Line(f_line_start, f_line_end)
+        actor_att_t_pt = pv.Sphere(radius=2.5, center=t_pt)
+        actor_att_f_pt = pv.Sphere(radius=2.5, center=f_pt)
+        
+        # Linie měření (vzdálenost mezi stěnami) v predozadní projektované ose v_ant
+        dist = np.dot((t_pt - f_pt), v_ant)
+        measure_end = f_pt + dist * v_ant
+        actor_att_measure = pv.Line(f_pt, measure_end)
+    else:
+        actor_att_t_line = pv.PolyData()
+        actor_att_f_line = pv.PolyData()
+        actor_att_t_pt = pv.PolyData()
+        actor_att_f_pt = pv.PolyData()
+        actor_att_measure = pv.PolyData()
+
     # =========================================================================
     # 4. PyVista Plotter Setup and Rendering
     # =========================================================================
@@ -164,6 +217,15 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_bl_p2 = plotter.add_mesh(actor_blum_pt2, color="lime", label="Blumensaat Pt2")
     else:
         actor_bl = actor_bl_p1 = actor_bl_p2 = None
+
+    if att_info and 'tibia_pt' in att_info:
+        actor_att_t = plotter.add_mesh(actor_att_t_line, color="red", line_width=4, label="ATT Kolmice: Tibia")
+        actor_att_f = plotter.add_mesh(actor_att_f_line, color="blue", line_width=4, label="ATT Kolmice: Femur")
+        actor_att_m = plotter.add_mesh(actor_att_measure, color="yellow", line_width=5, label="ATT Vzdálenost")
+        plotter.add_mesh(actor_att_t_pt, color="red")
+        plotter.add_mesh(actor_att_f_pt, color="blue")
+    else:
+        actor_att_t = actor_att_f = actor_att_m = None
 
     # Add default interaction tools
     plotter.add_axes()
@@ -202,6 +264,13 @@ def visualize_results(mask_data, spacing, vis_data):
             ("Regrese: Blumensaatova Linie", actor_bl, "green"),
             ("Blum. Začátek", actor_bl_p1, "lime"),
             ("Blum. Konec", actor_bl_p2, "lime")
+        ])
+        
+    if att_info and 'tibia_pt' in att_info:
+        elements.extend([
+            ("ATT: Kolmice Tibie (R)", actor_att_t, "red"),
+            ("ATT: Kolmice Femuru (B)", actor_att_f, "blue"),
+            ("ATT: Vzdálenost (Y)", actor_att_m, "yellow")
         ])
     
     for i, (name, actor, color_code) in enumerate(elements):
