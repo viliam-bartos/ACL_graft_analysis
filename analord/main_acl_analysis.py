@@ -157,7 +157,7 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx):
     p2_blum = (phys_dim0, d1_end * sy, d2_max * sx)
     blum_line = (p1_blum, p2_blum)
     
-    # 5. Konstrukce mřížky
+    # 5. Vektory a plný 2D Bounding Box přes laterální kondyl
     v_long = np.array([0.0, (d1_end - d1_start) * sy, (d2_max - d2_min) * sx])
     blum_length = np.linalg.norm(v_long)
     
@@ -167,24 +167,70 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx):
     v_long = v_long / blum_length
     v_short = np.array([0.0, -v_long[2], v_long[1]])
     
-    if v_short[1] > 0:
+    # Vektor musí ukazovat dolů ke kondylu
+    if v_short[1] < 0:
         v_short = -v_short
+
+    lateral_dir = -np.sign(t_dim0 - f_dim0)
+    if lateral_dir == 0: lateral_dir = -1
+    
+    if lateral_dir > 0:
+        lateral_slab = femur_mask[slice_dim0:, :, :]
+    else:
+        lateral_slab = femur_mask[:slice_dim0+1, :, :]
         
+    bone_coords_3d = np.argwhere(lateral_slab)
+    
+    if len(bone_coords_3d) > 0:
+        vec_y = bone_coords_3d[:, 1] * sy - p1_blum[1]
+        vec_z = bone_coords_3d[:, 2] * sx - p1_blum[2]
+        
+        proj_long = vec_y * v_long[1] + vec_z * v_long[2]
+        proj_short = vec_y * v_short[1] + vec_z * v_short[2]
+        
+        # TRIK: Odřízneme tělo femuru. Bereme jen voxely, které leží pod úrovní BL 
+        # (nebo max 5 fyzických milimetrů nad ní, abychom chytili přední okraj chrupavky).
+        condyle_voxels = proj_short > -5.0 
+        
+        valid_proj_long = proj_long[condyle_voxels]
+        valid_proj_short = proj_short[condyle_voxels]
+        
+        if len(valid_proj_long) > 0:
+            min_long = np.min(valid_proj_long) # Přední/zadní hrana
+            max_long = np.max(valid_proj_long) # Přední/zadní hrana
+            max_short = np.max(valid_proj_short) # Spodní hrana
+        else:
+            min_long = 0
+            max_long = blum_length
+            max_short = blum_length
+    else:
+        min_long = 0
+        max_long = blum_length
+        max_short = blum_length
+        
+    if max_short <= 0: max_short = blum_length
+    
+    # Posun počátku mřížky na nový nalezený okraj kosti (na ose v_long)
+    grid_origin = np.array(p1_blum) + min_long * v_long
+    grid_length = max_long - min_long
+    grid_depth = max_short
+    
     grid_lines = []
-    origin = np.array(p1_blum)
     ref_edge = None
     
     for i in range(5):
-        start_pt = origin + (i / 4.0) * blum_length * v_short
-        end_pt = start_pt + blum_length * v_long
+        t = i / 4.0
+        
+        start_pt = grid_origin + t * grid_depth * v_short
+        end_pt = start_pt + grid_length * v_long
         grid_lines.append((tuple(start_pt), tuple(end_pt)))
         
-        start_pt2 = origin + (i / 4.0) * blum_length * v_long
-        end_pt2 = start_pt2 + blum_length * v_short
+        start_pt2 = grid_origin + t * grid_length * v_long
+        end_pt2 = start_pt2 + grid_depth * v_short
         grid_lines.append((tuple(start_pt2), tuple(end_pt2)))
         
         if i == 0: 
-            ref_edge = (tuple(start_pt2), tuple(end_pt2))
+            ref_edge = (tuple(grid_origin), tuple(grid_origin + grid_length * v_long))
             
     return {'lines': grid_lines, 'ref_edge': ref_edge, 'blum_line': blum_line}
 
