@@ -104,203 +104,114 @@ def get_tibial_plateau_plane(tibia_mask, spacing):
         
     return normal, centroid
 
-def get_bernard_hertel_grid(femur_mask, footprint_phys, spacing_zyx):
-    """
-    Korekce os: Numpy maska má tvar (R-L, S-I, A-P).
-    Osa 0 = X = R-L
-    Osa 1 = Y = S-I
-    Osa 2 = Z = A-P
-    PyVista mapuje tyto rozměry přímo na (X, Y, Z). Takže Sagitální rovina odpovídá fixnímu X.
-    """
-    sz, sy, sx = spacing_zyx 
-    # V numpy po getArrayFromImage: sz = R-L, sy = S-I, sx = A-P
+def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx):
+    sz, sy, sx = spacing_zyx
+    f_dim0, f_dim1, f_dim2 = fem_vox
+    t_dim0, t_dim1, t_dim2 = tib_vox
     
-    # 1. PŘEVOD NA VOXELY
-    # footprint_phys je (R-L, S-I, A-P)
-    x_vox = int(np.round(footprint_phys[0] / sz)) # Osa X (R-L)
-    x_vox = np.clip(x_vox, 0, femur_mask.shape[0] - 1)
+    # 1. Posun o 10 voxelů mediálně
+    direction = np.sign(t_dim0 - f_dim0)
+    if direction == 0: direction = 1
+    
+    slice_dim0 = int(np.round(f_dim0 + 10 * direction))
+    slice_dim0 = np.clip(slice_dim0, 0, femur_mask.shape[0] - 1)
     
     # 2. Extrakce sagitálního řezu
-    # Maska je (R-L, S-I, A-P), takže řežeme na indexu 0 pro konstantní R-L
-    sagittal_slice = femur_mask[x_vox, :, :]
-    coords = np.argwhere(sagittal_slice)
+    sag_slice = femur_mask[slice_dim0, :, :]
     
-    if len(coords) == 0:
-        logging.error("Na ose X v tomto místě není žádná kost!")
-        return []
-
-    # Z coords máme sloupce: coords[:, 0] je S-I (Y), coords[:, 1] je A-P (Z)
-    
-    # 3. Nalezení střechy (Blumensaat) - hledáme v zadní polovině (Z)
-    z_min, z_max = coords[:, 1].min(), coords[:, 1].max()
-    posterior_threshold = z_min + (z_max - z_min) * 0.5
-    posterior_coords = coords[coords[:, 1] >= posterior_threshold]
+    y_c = int(f_dim1) 
+    z_c = int(f_dim2) 
     
     boundary_pts = []
-    # Pro každý A-P (Z) bod najdeme nejspodnější S-I (Y) bod
-    for z_val in np.unique(posterior_coords[:, 1]):
-        y_bottom = np.max(posterior_coords[posterior_coords[:, 1] == z_val, 0])
-        boundary_pts.append([z_val, y_bottom])
+    
+    # 3. Ray casting "doleva" (k menším indexům Z)
+    y_min_ray = max(0, y_c - 20)
+    y_max_ray = min(sag_slice.shape[0], y_c + 20)
+    
+    for y in range(y_min_ray, y_max_ray):
+        ray = sag_slice[y, :z_c]
+        hit_indices = np.argwhere(ray[::-1])
         
+        if len(hit_indices) > 0:
+            first_hit_reversed = hit_indices[0][0]
+            hit_z = z_c - 1 - first_hit_reversed
+            boundary_pts.append([hit_z, y])
+            
     boundary_pts = np.array(boundary_pts)
     
-    # 4. Výpočet DLOUHÉ strany (Rovnoběžka se střechou)
-    blum_line = None
-    if len(boundary_pts) > 3:
-        # linregress(Z, Y) -> jak se mění výška(Y) při posunu zepředu dozadu(Z)
-        slope, intercept, _, _, _ = linregress(boundary_pts[:, 0], boundary_pts[:, 1])
+    if len(boundary_pts) < 2:
+        return {} 
         
-        # --- ZMĚNA 1 PRO OTOČENÍ ÚHLU ---
-        # Původně: long_vec = np.array([1.0, slope])
-        # Změnou znaménka u slope otočíme úhel mřížky naopak.
-        long_vec = np.array([1.0, -slope]) 
-        
-        # Výpočet Blumensaatovy linie pro vizualizaci přesně podle regrese
-        x_phys = footprint_phys[0]
-        z_start = coords[:, 1].min()
-        z_end = coords[:, 1].max()
-        y_start = slope * z_start + intercept
-        y_end = slope * z_end + intercept
-        
-        p1_blum = (x_phys, y_start * sy, z_start * sx)
-        p2_blum = (x_phys, y_end * sy, z_end * sx)
-        blum_line = (p1_blum, p2_blum)
-    else:
-        long_vec = np.array([1.0, 0.0])
-
-    # Zabezpečení orientace - dlouhý vektor musí ukazovat zepředu dozadu (kladný směr Z)
-    if long_vec[0] < 0:
-        long_vec = -long_vec
-        
-    # Výpočet KRÁTKÉ strany (Kolmice na střechu - výška kondylu)
-    # Kolmice k [dZ, dY] je [-dY, dZ]
-    short_vec = np.array([-long_vec[1], long_vec[0]])
+    # ZDE CHYBĚLA DEFINICE (Extrémy pro vykreslení úsečky)
+    d2_min, d2_max = boundary_pts[:, 0].min(), boundary_pts[:, 0].max()
     
-    # Krátký vektor musí ukazovat shora dolů (kladný směr Y)
-    if short_vec[1] < 0:
-        # --- ZMĚNA 2 (OPRAVA CHYBY Z MINULA) ---
-        # Tady chybělo mínus, teď už vektor opravdu otočíme.
-        short_vec = -short_vec
+    # 4. Lineární regrese
+    slope, intercept, _, _, _ = linregress(boundary_pts[:, 0], boundary_pts[:, 1])
+    
+    phys_dim0 = slice_dim0 * sz
+    
+    d1_start = slope * d2_min + intercept
+    d1_end = slope * d2_max + intercept
+    
+    p1_blum = (phys_dim0, d1_start * sy, d2_min * sx)
+    p2_blum = (phys_dim0, d1_end * sy, d2_max * sx)
+    blum_line = (p1_blum, p2_blum)
+    
+    # 5. Konstrukce mřížky
+    v_long = np.array([0.0, (d1_end - d1_start) * sy, (d2_max - d2_min) * sx])
+    blum_length = np.linalg.norm(v_long)
+    
+    if blum_length == 0:
+        return {}
         
-     # 5. Promítnutí kondylu pro získání Bounding Boxu
-
-    # coords = [Y_val, Z_val]
-
-    z_coords = coords[:, 1]
-
-    y_coords = coords[:, 0]
-
-   
-
-    # Dot product ručně pro jistotu, že se nám to neprohodí
-
-    long_projs = z_coords * long_vec[0] + y_coords * long_vec[1]
-
-    short_projs = z_coords * short_vec[0] + y_coords * short_vec[1]
-
-   
-
-    # Limity dlouhé strany (Délka kondylu)
-
-    l_min = np.min(long_projs)
-
-    l_max = np.max(long_projs)
-
-   
-
-    # Limity krátké strany (Výška kondylu)
-
-    s_min = np.min(short_projs) # Strop zářezu
-
-    s_max = np.max(short_projs) # Spodek kondylu
-
-    # 6. Tvorba mřížky pro PyVistu
+    v_long = v_long / blum_length
+    v_short = np.array([0.0, -v_long[2], v_long[1]])
+    
+    if v_short[1] > 0:
+        v_short = -v_short
+        
     grid_lines = []
+    origin = np.array(p1_blum)
     ref_edge = None
     
-    # Fixní souřadnice R-L (X v PyVistě)
-    x_phys = footprint_phys[0]
-    
-    # --- Čáry rovnoběžné s DLOUHOU stranou (řežou výšku kondylu) ---
     for i in range(5):
-        s_val = s_min + (s_max - s_min) * (i / 4.0)
-        p1_2d = l_min * long_vec + s_val * short_vec
-        p2_2d = l_max * long_vec + s_val * short_vec
+        start_pt = origin + (i / 4.0) * blum_length * v_short
+        end_pt = start_pt + blum_length * v_long
+        grid_lines.append((tuple(start_pt), tuple(end_pt)))
         
-        # p1_2d = [Z_index_val, Y_index_val]
-        # Převod do PyVista XYZ = (R-L_fixed, S-I_var, A-P_var) -> (x_phys, Y_index * sy, Z_index * sx)
-        p1_phys = (x_phys, p1_2d[1] * sy, p1_2d[0] * sx)
-        p2_phys = (x_phys, p2_2d[1] * sy, p2_2d[0] * sx)
+        start_pt2 = origin + (i / 4.0) * blum_length * v_long
+        end_pt2 = start_pt2 + blum_length * v_short
+        grid_lines.append((tuple(start_pt2), tuple(end_pt2)))
         
-        grid_lines.append((p1_phys, p2_phys))
-        
-    # --- Čáry rovnoběžné s KRÁTKOU stranou (řežou délku kondylu) ---
-    for j in range(5):
-        l_val = l_min + (l_max - l_min) * (j / 4.0)
-        p1_2d = l_val * long_vec + s_min * short_vec
-        p2_2d = l_val * long_vec + s_max * short_vec
-        
-        p1_phys = (x_phys, p1_2d[1] * sy, p1_2d[0] * sx)
-        p2_phys = (x_phys, p2_2d[1] * sy, p2_2d[0] * sx)
-        
-        if j == 0:
-            ref_edge = (p1_phys, p2_phys)
-        else:
-            grid_lines.append((p1_phys, p2_phys))
-        
+        if i == 0: 
+            ref_edge = (tuple(start_pt2), tuple(end_pt2))
+            
     return {'lines': grid_lines, 'ref_edge': ref_edge, 'blum_line': blum_line}
 
-# =============================================================================
-# Module 2: Automated Footprint Extraction & Standardization
-# =============================================================================
+
 def extract_footprints(mask_array, spacing):
-    """
-    Find contact areas between the ACL mask (1) and Femur (2), and ACL (1) and Tibia (3).
-    Calculates 3D centroids of these regions.
-    Proposes a heuristic for Bernard & Hertel 4x4 grid projection.
-    
-    Parameters:
-        mask_array (np.ndarray): 3D numpy array of the segmentation mask.
-        spacing (tuple): Voxel spacing (z, y, x).
-        
-    Returns:
-        tuple: femur_centroid_phys, tibia_centroid_phys
-    """
-    logging.info("Starting Module 2: Footprint Extraction.")
-    
     acl_mask = (mask_array == 1)
     femur_mask = (mask_array == 2)
     tibia_mask = (mask_array == 3)
     
-    # Binary dilation of the ACL to capture the boundary contact points
-    struct = ndimage.generate_binary_structure(3, 1) # 1-connectivity cross
+    struct = ndimage.generate_binary_structure(3, 1)
     acl_dilated = ndimage.binary_dilation(acl_mask, structure=struct, iterations=2)
     
-    # Locate exact footprint contact areas
     femoral_contact = acl_dilated & femur_mask
     tibial_contact = acl_dilated & tibia_mask
     
-    if np.sum(femoral_contact) == 0 or np.sum(tibial_contact) == 0:
-        logging.warning("Footprint contact area not found. Check mask labels or dilation radius.")
-    
-    # Calculate 3D centroids (in voxel coordinates)
-    # Using scipy's center_of_mass: returns (z, y, x)
+    # Centroidy ve voxelových souřadnicích (dim0, dim1, dim2)
     fem_z, fem_y, fem_x = ndimage.center_of_mass(femoral_contact)
     tib_z, tib_y, tib_x = ndimage.center_of_mass(tibial_contact)
     
-    # Calculate ACL vector (from Tibia to Femur) in voxel coordinates
-    acl_vector_voxels = np.array([fem_z - tib_z, fem_y - tib_y, fem_x - tib_x])
+    # Generování mřížky pomocí voxelových pozic k určení směru posunu
+    bh_grid_info = get_bernard_hertel_grid(
+        femur_mask, 
+        (fem_z, fem_y, fem_x), 
+        (tib_z, tib_y, tib_x), 
+        spacing
+    )
     
-    # We must calculate femur_centroid_phys before B&H grid
-    sz, sy, sx = spacing
-    femur_centroid_phys = (fem_z * sz, fem_y * sy, fem_x * sx)
-    
-    # Generate Bernard & Hertel 4x4 Grid
-    bh_grid_info = get_bernard_hertel_grid(femur_mask, femur_centroid_phys, spacing)
-    if bh_grid_info and bh_grid_info.get('lines'):
-        logging.info(f"Generated {len(bh_grid_info['lines'])} B&H grid lines and 1 reference edge.")
-    
-    # Convert centroids to physical space depending on spacing (sR, sS, sA)
     sz, sy, sx = spacing
     femur_centroid_phys = (fem_z * sz, fem_y * sy, fem_x * sx)
     tibia_centroid_phys = (tib_z * sz, tib_y * sy, tib_x * sx)
