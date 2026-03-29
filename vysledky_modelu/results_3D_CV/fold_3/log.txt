@@ -1,2 +1,0 @@
-Fold 3 Best Dice: 0.7383
-Epochs trained: 375

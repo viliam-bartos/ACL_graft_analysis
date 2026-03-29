@@ -1,2 +1,0 @@
-Fold 4 Best Dice: 0.5808
-Epochs trained: 375
