@@ -11,7 +11,7 @@ from datetime import datetime
 import random
 import nibabel as nib
 
-from monai.data import Dataset, DataLoader, decollate_batch
+from monai.data import Dataset, DataLoader, decollate_batch, PersistentDataset
 from monai.inferers import sliding_window_inference
 from monai.transforms import (
     Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRangePercentilesd,
@@ -25,16 +25,17 @@ from torch.cuda.amp import autocast, GradScaler
 CONFIG = {
     'train_img_dir': r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images",
     'train_mask_dir': r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\LABELS_TRAIN",
-    'patch_size': (128, 128, 32), # Možná bude třeba zmenšit (např. 96, 96, 32) v případě docházející paměti
+    'patch_size': (144, 144, 32), # Možná bude třeba zmenšit (např. 96, 96, 32) v případě docházející paměti
     'batch_size': 1,              # Sníženo pro 6GB VRAM
     'accum_iter': 8,              # Gradient accumulation (efektivní batch_size = 8)
     'learning_rate': 1e-4,
     'epochs': 500,
-    'val_interval': 5,            # Zkráceno na 5 pro častější kontrolu
+    'val_interval': 10,            # Zkráceno na 5 pro častější kontrolu
     'base_filters': 32,           # Zvýšeno na 32 pro mnohem chytřejší model (naučí se víc o ACL)
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'num_workers': 2,             # Nastaveno na 2 pro on-the-fly Dataloader s nižší RAM
-    'patience': 50,               # Počet EPOCH bez zlepšení (nikoliv validačních kroků)
+    'num_workers': 4,             # Zvýšeno na 4 (PersistentDataset je šetrnější k RAM)
+    'patience': 80,               # Počet EPOCH bez zlepšení (nikoliv validačních kroků)
+    'validate_masks': 0,          # 1 pro check obsahu masek (zdlouhavé), 0 pro přeskočení
     'save_dir': 'results_3D'
 }
 
@@ -161,8 +162,8 @@ def plot_metrics(train_losses, val_losses, dice_scores, save_dir):
     plt.savefig(os.path.join(save_dir, 'metrics_plot.png'), dpi=150)
     plt.close()
 
-def pair_and_validate_datasets(img_dir, mask_dir):
-    """Páruje obrázky a masky na základě ID z názvu souboru, kontroluje validitu."""
+def pair_and_validate_datasets(img_dir, mask_dir, validate=0):
+    """Páruje obrázky a masky na základě ID z názvu souboru, volitelně kontroluje validitu."""
     img_files = sorted(glob.glob(os.path.join(img_dir, "*.nii*")))
     mask_files = sorted(glob.glob(os.path.join(mask_dir, "*.nii*")))
     
@@ -174,24 +175,28 @@ def pair_and_validate_datasets(img_dir, mask_dir):
             
     paired_files = []
     print(f"Hledám masky a pátram po příslušných snímcích v {img_dir}...")
-    for f in tqdm(mask_files, desc="Validating masks"):
+    
+    desc_text = "Validating masks" if validate == 1 else "Pairing items fast"
+    for f in tqdm(mask_files, desc=desc_text):
         match = re.search(r'\d+', os.path.basename(f))
         if match:
             mask_id = match.group()
             if mask_id in img_dict:
-                try:
-                    # Můžeme přidat striktní kontrolu, zda jde soubor načíst
-                    mask_img = nib.load(f)
-                    mask_data = mask_img.get_fdata()
-                    unique_labels = np.unique(mask_data)
-                    
-                    if np.any(unique_labels >= 4):
-                        print(f"Upozornění: Nalezeny neočekávané popisky: {unique_labels} v mask: {f}. Přeskakuji...")
+                if validate == 1:
+                    try:
+                        # Striktní kontrola, zda jde soubor načíst a neobsahuje špatné třídy
+                        mask_img = nib.load(f)
+                        mask_data = mask_img.get_fdata()
+                        unique_labels = np.unique(mask_data)
+                        
+                        if np.any(unique_labels >= 4):
+                            print(f"Upozornění: Nalezeny neočekávané popisky: {unique_labels} v mask: {f}. Přeskakuji...")
+                            continue
+                    except Exception as e:
+                        print(f"Chyba při čtení souboru {f}: {e}. Přeskakuji...")
                         continue
                         
-                    paired_files.append({"image": img_dict[mask_id], "label": f})
-                except Exception as e:
-                    print(f"Chyba při čtení souboru {f}: {e}. Přeskakuji...")
+                paired_files.append({"image": img_dict[mask_id], "label": f})
             else:
                 print(f"Upozornění: Pro masku {f} nebyl nalezen odpovídající vzor (ID: {mask_id}).")
                 
@@ -200,8 +205,16 @@ def pair_and_validate_datasets(img_dir, mask_dir):
 def main():
     print(f"Running on: {CONFIG['device']}")
 
+    # Optimalizace pro zrychlení výpočtu na GPU u fixní velikosti vstupů
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
     # Volání validace a párování (zajistí jen kompatibilní IDčka)
-    paired_files = pair_and_validate_datasets(CONFIG['train_img_dir'], CONFIG['train_mask_dir'])
+    paired_files = pair_and_validate_datasets(
+        CONFIG['train_img_dir'], 
+        CONFIG['train_mask_dir'],
+        validate=CONFIG.get('validate_masks', 0)
+    )
 
     if len(paired_files) < 3:
         raise RuntimeError("Nenalezen dostatek validních dat (< 3 párové soubory)! Zkontroluj cesty.")
@@ -216,13 +229,18 @@ def main():
 
     print(f"Dataset result: {len(train_files)} Train, {len(val_files)} Val")
 
-    # Místo CacheDataset použijeme obyčejný Dataset, který načítá "on-the-fly" a nepohltí RAM
-    train_ds = Dataset(data=train_files, transform=get_transforms('train'))
+    # Nastavení PersistentDataset pro masivní zrychlení (uloží výsledky deterministických operací na disk)
+    # a uvolní CPU pro plynulé zásobení GPU bez výkyvů.
+    cache_dir = os.path.join(CONFIG.get('save_dir', 'results_3D'), "persistent_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    train_ds = PersistentDataset(data=train_files, transform=get_transforms('train'), cache_dir=cache_dir)
     train_loader = DataLoader(train_ds, batch_size=CONFIG['batch_size'], shuffle=True,
-                              num_workers=CONFIG['num_workers'], pin_memory=True, persistent_workers=False)
+                              num_workers=CONFIG['num_workers'], pin_memory=True, persistent_workers=True)
 
-    val_ds = Dataset(data=val_files, transform=get_transforms('val'))
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, pin_memory=False, num_workers=0)
+    val_ds = PersistentDataset(data=val_files, transform=get_transforms('val'), cache_dir=cache_dir)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, 
+                            num_workers=CONFIG['num_workers'], pin_memory=True, persistent_workers=True)
 
     # OUTPUT channel změněn na 4 (0: pozadí, 1: ACL, 2: Femur, 3: Tibia)
     model = LightUNet3D(in_ch=1, out_ch=4, base=CONFIG['base_filters']).to(CONFIG['device'])
@@ -283,7 +301,8 @@ def main():
 
         for batch in pbar:
             step += 1
-            images, labels = batch["image"].to(CONFIG['device']), batch["label"].to(CONFIG['device'])
+            images = batch["image"].to(CONFIG['device'], non_blocking=True)
+            labels = batch["label"].to(CONFIG['device'], non_blocking=True)
 
             with autocast():
                 outputs = model(images)
@@ -311,8 +330,8 @@ def main():
 
             with torch.no_grad():
                 for val_batch in val_loader:
-                    val_images = val_batch["image"].to(CONFIG['device'])
-                    val_labels = val_batch["label"].to(CONFIG['device'])
+                    val_images = val_batch["image"].to(CONFIG['device'], non_blocking=True)
+                    val_labels = val_batch["label"].to(CONFIG['device'], non_blocking=True)
 
                     with autocast():
                         val_outputs = sliding_window_inference(
