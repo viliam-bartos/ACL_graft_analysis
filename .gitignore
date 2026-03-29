@@ -10,3 +10,4 @@ results_3D/
 vysledky_modelu/
 *.nii.gz
 *.csv
+*.pth
