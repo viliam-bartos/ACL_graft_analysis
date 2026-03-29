@@ -1,7 +1,0 @@
-Training completed
-Start: 2026-03-18 22:44:58.891170
-End: 2026-03-19 06:06:25.881755
-Duration: 7:21:26.990585
-Best Mean Dice: 0.8056
-Final Train Loss: 0.6340
-Total Epochs: 320
