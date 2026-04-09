@@ -1,0 +1,45 @@
+#Ignore thumbnails created by Windows & Mac
+Thumbs.db
+.DS_Store
+
+#Ignore thumbnails created by Windows & Mac
+Thumbs.db
+.DS_Store
+
+# Ignore everything in the "Untracked" folder
+Untracked/
+
+# Ignore IDE folders
+.vs/
+.vscode/
+.idea/
+
+# Ignore python venvs
+.venv/
+
+#Ignore binaries
+*.exe
+[Bb]in
+[Dd]ebug*/
+[Rr]elease*/
+
+# Ignore log files
+*.log
+
+
+# Ignore IDE folders
+.vs/
+.vscode/
+.idea/
+
+# Ignore python venvs
+.venv/
+
+#Ignore binaries
+*.exe
+[Bb]in
+[Dd]ebug*/
+[Rr]elease*/
+
+# Ignore log files
+*.log
