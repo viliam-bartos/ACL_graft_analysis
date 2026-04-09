@@ -21,8 +21,8 @@ def flip_nifti_x(input_path, output_path):
     print("Done!")
 
 if __name__ == "__main__":
-    input_file = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_073.nii.gz"
-    output_file = r"c:\DIPLOM_PRACE\ACL_segment\opraveno_pro_model_flipped_x.nii.gz"
+    input_file = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_153.nii.gz"
+    output_file = r"c:\DIPLOM_PRACE\ACL_segment\case_153.nii.gz"
     
     if os.path.exists(input_file):
         flip_nifti_x(input_file, output_file)

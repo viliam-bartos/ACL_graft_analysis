@@ -11,3 +11,4 @@ vysledky_modelu/
 *.nii.gz
 *.csv
 *.pth
+*.png

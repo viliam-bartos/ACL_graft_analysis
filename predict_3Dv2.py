@@ -184,8 +184,8 @@ def process_patient(model_path, input_nifti_path, output_path, device='cuda'):
 # ==========================================
 if __name__ == "__main__":
     MODEL = r"C:\DIPLOM_PRACE\ACL_segment\results_3D\best_model.pth"
-    INPUT = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_116.nii.gz"
-    OUTPUT = "mask_case_116.nii.gz"
+    INPUT = r"c:\DIPLOM_PRACE\ACL_segment\case_153.nii.gz"
+    OUTPUT = "mask_case_153.nii.gz"
 
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 

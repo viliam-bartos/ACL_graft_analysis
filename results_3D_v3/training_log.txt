@@ -1,0 +1,11 @@
+Training completed
+Start: 2026-03-29 23:59:45.047947
+End: 2026-03-30 11:42:01.738857
+Duration: 11:42:16.690910
+Best Mean Dice: 0.8928
+Final Train Loss: 0.5101
+Total Epochs: 380
+
+
+Epoch 300: Train Loss 0.5176 | Val Loss 0.1074
+DICE Mean: 0.8928 [ACL: 0.7216, Femur: 0.9784, Tibia: 0.9783]

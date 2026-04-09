@@ -148,7 +148,7 @@ def process_patient(model, input_path, output_path, transforms, device):
 if __name__ == "__main__":
     MODEL_PATH = r"C:\DIPLOM_PRACE\ACL_segment\results_3D\best_model.pth"
     INPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\predict")
-    OUTPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\base32")
+    OUTPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\base32_v2")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
