@@ -328,7 +328,7 @@ def main():
     for i, score in enumerate(fold_results):
         print(f"Fold {i}: Dice = {score:.4f}")
     print("-" * 30)
-    print(f"MEAN DICE: {np.mean(fold_results):.4f} ± {np.std(fold_results):.4f}")
+    print(f"MEAN DICE: {np.mean(fold_results):.4f} +- {np.std(fold_results):.4f}")
     print("=" * 60)
 
 
