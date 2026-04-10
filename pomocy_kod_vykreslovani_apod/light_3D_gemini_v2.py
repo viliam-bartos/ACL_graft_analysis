@@ -20,7 +20,7 @@ from monai.transforms import (
 )
 from monai.losses import DiceCELoss, DiceLoss
 from monai.metrics import DiceMetric
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 CONFIG = {
     'train_img_dir': r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images",
@@ -229,16 +229,12 @@ def main():
 
     print(f"Dataset result: {len(train_files)} Train, {len(val_files)} Val")
 
-    # Nastavení PersistentDataset pro masivní zrychlení (uloží výsledky deterministických operací na disk)
-    # a uvolní CPU pro plynulé zásobení GPU bez výkyvů.
-    cache_dir = os.path.join(CONFIG.get('save_dir', 'results_3D'), "persistent_cache")
-    os.makedirs(cache_dir, exist_ok=True)
-    
-    train_ds = PersistentDataset(data=train_files, transform=get_transforms('train'), cache_dir=cache_dir)
+    # Použití klasického Datasetu pro okamžitý start tréninku (bez čekání na vytvoření cache)
+    train_ds = Dataset(data=train_files, transform=get_transforms('train'))
     train_loader = DataLoader(train_ds, batch_size=CONFIG['batch_size'], shuffle=True,
                               num_workers=CONFIG['num_workers'], pin_memory=True, persistent_workers=True)
 
-    val_ds = PersistentDataset(data=val_files, transform=get_transforms('val'), cache_dir=cache_dir)
+    val_ds = Dataset(data=val_files, transform=get_transforms('val'))
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, 
                             num_workers=CONFIG['num_workers'], pin_memory=True, persistent_workers=True)
 
@@ -266,10 +262,10 @@ def main():
     
     # Scheduler: Sníží Learning Rate na polovinu (faktor 0.5), pokud se DICE nezlepší během dalších 20 epoch
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=20 // CONFIG['val_interval'], verbose=True
+        optimizer, mode='max', factor=0.5, patience=20 // CONFIG['val_interval'],
     )
     
-    scaler = GradScaler()
+    scaler = GradScaler('cuda')
     
     # Metrika DICE kalkulovaná per-class
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
@@ -304,7 +300,7 @@ def main():
             images = batch["image"].to(CONFIG['device'], non_blocking=True)
             labels = batch["label"].to(CONFIG['device'], non_blocking=True)
 
-            with autocast():
+            with autocast('cuda'):
                 outputs = model(images)
                 loss = loss_function(outputs, labels)
                 loss = loss / CONFIG['accum_iter']

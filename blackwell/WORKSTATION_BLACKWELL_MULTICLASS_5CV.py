@@ -23,7 +23,7 @@ from monai.transforms import (
 from monai.losses import DiceLoss
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.misc import set_determinism
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
 
 # ----------------------------------------------------
 # Globální nastavení pro Testování kódu
@@ -241,7 +241,7 @@ def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device
             val_images, val_labels = val_batch["image"].to(device), val_batch["label"].to(device)
             
             start_t = time.time()
-            with autocast():
+            with autocast('cuda', dtype=torch.bfloat16):
                 val_outputs = sliding_window_inference(val_images, roi_size=config['patch_size'], sw_batch_size=4, predictor=model, overlap=0.5)
             inf_time = time.time() - start_t
             
@@ -310,8 +310,7 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
     loss_function = WeightedDiceCELoss(class_weights)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=config['lr_patience'], verbose=True)
-    scaler = GradScaler()
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=config['lr_patience'])
 
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
     hd95_metric = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean_batch")
@@ -339,15 +338,13 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
             images, labels = batch["image"].to(device), batch["label"].to(device)
 
             optimizer.zero_grad()
-            with autocast():
+            with autocast('cuda', dtype=torch.bfloat16):
                 outputs = model(images)
                 loss = loss_function(outputs, labels)
 
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
+            optimizer.step()
 
             epoch_loss += loss.item()
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
@@ -370,7 +367,7 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
                     val_labels = val_batch["label"].to(device)
 
                     inf_start = time.time()
-                    with autocast():
+                    with autocast('cuda', dtype=torch.bfloat16):
                         val_outputs = sliding_window_inference(inputs=val_images, roi_size=config['patch_size'], sw_batch_size=4, predictor=model, overlap=0.5)
                         v_loss = loss_function(val_outputs, val_labels)
                         val_loss_sum += v_loss.item()
@@ -440,6 +437,9 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
 def main():
     multiprocessing.freeze_support()
     set_seed(42)
+    
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision('high')
 
     train_img_dir = r"C:\DIPLOM_PRACE\ACL_segment\data_train\images"
     train_mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\data_train\labels"
@@ -474,10 +474,10 @@ def main():
             'base_filters': 64,              
             'lr': 1e-4,
             'epochs': 1000,
-            'val_interval': 5,               # Kontrola každou 5. epochu (ušetří čas validace)
-            'batch_size': 4,                 
-            'patience': 40,                  # Early stop po: 40 kroků * 5 = 200 epoch bez zlepšení!
-            'lr_patience': 15,               # Snížení rychlosti učení po: 15 kroků * 5 = 75 epoch
+            'val_interval': 5,               # Kontrola každou 5. epochu
+            'batch_size': 16,                 
+            'patience': 40,                  # Early stop po: 40 kroků * 5 = 200 epoch bez zlepšení
+            'lr_patience': 20,               # Snížení rychlosti učení po: 20 kroků * 5 = 100 epoch
             'dropout': 0.2                  
         }
 

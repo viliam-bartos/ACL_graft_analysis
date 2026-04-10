@@ -3,7 +3,6 @@ import torch.nn as nn
 import numpy as np
 import nibabel as nib
 import os
-from pathlib import Path
 from scipy.ndimage import label, binary_closing
 from monai.inferers import sliding_window_inference
 from monai.transforms import (
@@ -70,10 +69,13 @@ class LightUNet3D(nn.Module):
 # ==========================================
 # 2. LOGIKA ZPRACOVÁNÍ (S POSTPROCESSINGEM)
 # ==========================================
+
 def postprocess_mask(mask):
     """
-    Closing + Largest Connected Component pro každou třídu zvlášť.
+    Closing + Largest Connected Component pro každou třídu zvlášť (1 = femur, 2 = tibie).
     """
+    print("  Post-processing (Closing + LCC)...")
+    
     final_mask = np.zeros_like(mask)
     struct = np.ones((3, 3, 3), dtype=bool)
 
@@ -83,37 +85,74 @@ def postprocess_mask(mask):
         if class_mask.sum() == 0:
              continue
              
+        # 1. Morfologické uzavření (Closing)
         mask_closed = binary_closing(class_mask, structure=struct).astype(np.uint8)
+
+        # 2. Hledání souvislých komponent
         labeled_array, num_features = label(mask_closed)
 
         if num_features == 0:
             continue
+
         if num_features == 1:
             final_mask[mask_closed == 1] = class_id
             continue
 
+        # Spočítáme velikost každé komponenty (ignorujeme pozadí 0)
         sizes = np.bincount(labeled_array.ravel())
         sizes[0] = 0
+
+        # Najdeme label s největším počtem voxelů
         max_label = sizes.argmax()
+
+        # Vytvoříme novou masku jen s tímto labelem
         cleaned_mask = (labeled_array == max_label).astype(np.uint8)
         final_mask[cleaned_mask == 1] = class_id
 
     return final_mask
 
 
-def process_patient(model, input_path, output_path, transforms, device):
-    print(f"Zpracovávám: {input_path.name}")
+def process_patient(model_path, input_nifti_path, output_path, device='cuda'):
+    print(f"Zpracovávám: {input_nifti_path}")
 
-    data_dict = [{"image": str(input_path)}]
+    # --- A. DEFINICE TRANSFORMACÍ (MONAI NATIVE) ---
+    # Tohle zaručí 100% shodu s tréninkem
+    transforms = Compose([
+        LoadImaged(keys=["image"]),
+        EnsureChannelFirstd(keys=["image"]),
+        ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0, b_max=1.0, clip=True),
+        # ZÁSADNÍ BOD: nonzero=True ignoruje černé pozadí při výpočtu průměru a směrodatné odchylky
+        NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
+        SpatialPadd(keys=["image"], spatial_size=(128, 128, 32)),  # Patch size z configu
+    ])
+
+    # --- B. NAČTENÍ DAT PŘES DATASET ---
+    data_dict = [{"image": input_nifti_path}]
     ds = Dataset(data=data_dict, transform=transforms)
     loader = DataLoader(ds, batch_size=1, shuffle=False)
 
+    # --- C. MODEL ---
+    # Musí přesně odpovídat parametrům v trénovacím skriptu (4 kanály, base=32)
+    model = LightUNet3D(in_ch=1, out_ch=4, base=32).to(device)
+    checkpoint = torch.load(model_path, map_location=device)
+    if 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint)
+    model.eval()
+
+    print("  Běží inference (Sliding Window)...")
+
+    # --- D. INFERENCE ---
+    # Iterujeme přes loader (je tam jen 1 obrázek)
     for batch in loader:
         input_tensor = batch["image"].to(device)
 
+        # Získání původní orientace pro uložení (MetaTensor v novém MONAI)
         try:
             original_affine = batch["image"].affine[0].numpy()
         except:
+            # Fallback
             original_affine = np.eye(4)
 
         with torch.no_grad():
@@ -123,66 +162,34 @@ def process_patient(model, input_path, output_path, transforms, device):
                 sw_batch_size=4,
                 predictor=model,
                 overlap=0.5,
-                mode='constant',
+                mode='constant',  # Pro inferenci lepší než constant, pokud chceš hezčí přechody
                 device=device
             )
             output_mask = torch.argmax(output_tensor, dim=1)
 
+        # Zpět na numpy [X, Y, Z] (odstraníme batch dimenzi, channel zmizel díky argmaxu)
         pred_array = output_mask.cpu().numpy()[0, :, :, :].astype(np.uint8)
 
-        # Pojistka pro navrácení původních rozměrů z důvodu SpatialPadd
-        orig_nii = nib.load(str(input_path))
-        orig_shape = orig_nii.shape
-        pred_array = pred_array[:orig_shape[0], :orig_shape[1], :orig_shape[2]]
-
+        # --- E. POST-PROCESSING ---
         final_mask = postprocess_mask(pred_array)
 
+        # --- F. ULOŽENÍ ---
         out_nifti = nib.Nifti1Image(final_mask, original_affine)
-        nib.save(out_nifti, str(output_path))
-        print(f"  Uloženo: {output_path.name}")
+        nib.save(out_nifti, output_path)
+        print(f"  Uloženo: {output_path}")
 
 
 # ==========================================
 # SPUŠTĚNÍ
 # ==========================================
 if __name__ == "__main__":
-    MODEL_PATH = r"C:\DIPLOM_PRACE\ACL_segment\results_3D\best_model.pth"
-    INPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\predict")
-    OUTPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\base32_v2")
+    MODEL = r"C:\DIPLOM_PRACE\ACL_segment\results_3D_v3\best_model.pth"
+    INPUT = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_007.nii.gz"
+    OUTPUT = "mask_case_007.nii.gz"
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    if not os.path.exists(MODEL_PATH):
-        print(f"Chyba: Nenalezen model ({MODEL_PATH})")
-        exit()
-
-    print("Načítám model...")
-    # 4 kanály a 32 base filters dle nové architektury
-    model = LightUNet3D(in_ch=1, out_ch=4, base=32).to(DEVICE)
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
-    if 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
+    if os.path.exists(MODEL) and os.path.exists(INPUT):
+        process_patient(MODEL, INPUT, OUTPUT, device=DEVICE)
     else:
-        model.load_state_dict(checkpoint)
-    model.eval()
-
-    transforms = Compose([
-        LoadImaged(keys=["image"]),
-        EnsureChannelFirstd(keys=["image"]),
-        ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0, b_max=1.0, clip=True),
-        NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
-        SpatialPadd(keys=["image"], spatial_size=(128, 128, 32)),
-    ])
-
-    files = [f for f in INPUT_DIR.rglob("*") if f.is_file() and f.name.endswith(('.nii', '.nii.gz'))]
-
-    if not files:
-        print(f"Ve složce {INPUT_DIR} nejsou žádné NIfTI soubory k predikci.")
-    else:
-        print(f"Nalezeno {len(files)} souborů. Spouštím hromadnou inferenci...")
-        for file_path in files:
-            out_path = OUTPUT_DIR / f"mask_{file_path.name}"
-            process_patient(model, file_path, out_path, transforms, DEVICE)
-
-    print("Hromadná inference dokončena.")
+        print(f"Chyba: Nenalezen model ({MODEL}) nebo vstupní data ({INPUT})")
