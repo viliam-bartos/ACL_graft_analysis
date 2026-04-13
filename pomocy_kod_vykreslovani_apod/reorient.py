@@ -32,7 +32,7 @@ def reorient_nifti_to_asr(input_dir, output_dir):
 
 
 if __name__ == "__main__":
-    INPUT = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images"
-    OUTPUT = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR"
+    INPUT = r"C:\DIPLOM_PRACE\ACL_segment\data_train\images"
+    OUTPUT = r"C:\DIPLOM_PRACE\ACL_segment\data_train\images_ASR"
 
     reorient_nifti_to_asr(INPUT, OUTPUT)
