@@ -607,6 +607,97 @@ def calculate_att(femur_mask, tibia_mask, spacing, plane_info, f_centroid, t_cen
     
     return att_mm, debug_info
 
+def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_info):
+    """
+    Calculate Stäubli percentage for the tibial footprint.
+    Analogy to Bernard-Hertel, but for the tibia.
+    Percentage represents the distance from the anterior tibial margin to the ACL centroid 
+    divided by the total AP dimension on the sagittal slice.
+    """
+    logging.info("Calculating Stäubli percentage for the tibial footprint.")
+    if any(np.isnan(c) for c in t_centroid) or any(np.isnan(c) for c in f_centroid):
+        return np.nan, {}
+        
+    sz, sy, sx = spacing
+    
+    tib_z_idx = int(np.round(t_centroid[0] / sz)) if sz > 0 else 0
+    tib_z_idx = np.clip(tib_z_idx, 0, tibia_mask.shape[0] - 1)
+    
+    sag_slice = tibia_mask[tib_z_idx, :, :]
+    coords_2d = np.argwhere(sag_slice)
+    
+    if len(coords_2d) == 0:
+        return np.nan, {}
+        
+    phys_dim0 = tib_z_idx * sz
+    y_phys = coords_2d[:, 0] * sy
+    x_phys = coords_2d[:, 1] * sx
+    
+    points_3d = np.column_stack((np.full_like(y_phys, phys_dim0), y_phys, x_phys))
+    
+    # Dle definice měříme celkový předozadní rozměr na daném sagitálním řezu
+    # (hledáme nejdelší úsečku od nejvíce anteriorního bodu k nejvíce posteriornímu na tomto řezu)
+    
+    # Determine Anterior direction along the sagittal plane
+    plane_normal = plane_info.get("normal", np.array([0.0, -1.0, 0.0]))
+    acl_vec = np.array(t_centroid) - np.array(f_centroid)
+    ap_global = np.array([0.0, 0.0, 1.0])
+    
+    if np.dot(ap_global, acl_vec) < 0:
+        ap_global = -ap_global
+        
+    dot_prod = np.dot(ap_global, plane_normal)
+    v_anterior = ap_global - dot_prod * plane_normal
+    norm_v = np.linalg.norm(v_anterior)
+    
+    if norm_v > 0:
+        v_anterior = v_anterior / norm_v
+    else:
+        v_anterior = ap_global
+        
+    # Project onto sagittal plane exactly (dim0 = 0)
+    v_anterior_sag = np.array([0.0, v_anterior[1], v_anterior[2]])
+    norm_sag = np.linalg.norm(v_anterior_sag)
+    
+    if norm_sag > 0:
+        v_anterior_sag = v_anterior_sag / norm_sag
+    else:
+        v_anterior_sag = ap_global
+        v_anterior_sag[0] = 0.0
+        if np.linalg.norm(v_anterior_sag) > 0:
+            v_anterior_sag = v_anterior_sag / np.linalg.norm(v_anterior_sag)
+            
+    # Project points on the AP axis
+    projections = np.dot(points_3d, v_anterior_sag)
+    
+    ant_edge = np.max(projections)
+    post_edge = np.min(projections)
+    
+    # Find exact 3D points corresponding to these extremes for optional visualization
+    ant_pt_idx = np.argmax(projections)
+    post_pt_idx = np.argmin(projections)
+    ant_pt = points_3d[ant_pt_idx]
+    post_pt = points_3d[post_pt_idx]
+    
+    cent_proj = np.dot(np.array(t_centroid), v_anterior_sag)
+    
+    total_ap_length = ant_edge - post_edge
+    
+    if total_ap_length <= 0:
+        return np.nan, {}
+        
+    # Stäubli 0% is anterior margin, 100% is posterior margin
+    staubli_pct = ((ant_edge - cent_proj) / total_ap_length) * 100.0
+    staubli_pct = np.clip(staubli_pct, 0.0, 100.0)
+    
+    debug_info = {
+        "anterior_pt": ant_pt,
+        "posterior_pt": post_pt,
+        "v_anterior_sag": v_anterior_sag
+    }
+    
+    return float(staubli_pct), debug_info
+
 # =============================================================================
 # Main Entry Point
 # =============================================================================
@@ -656,13 +747,17 @@ def run_analysis(img_path, ref_path, mask_path):
     tibia_mask = (mask_array == 3)
     att_mm, att_debug_info = calculate_att(femur_mask, tibia_mask, spacing_zyx, plane_info, f_centroid, t_centroid)
     
+    staubli_pct, staubli_debug_info = calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing_zyx, plane_info)
+    
     plane_info['att_info'] = att_debug_info
+    plane_info['staubli_info'] = staubli_debug_info
     
     # Vytáhnutí procent z mřížky
     bh_len_pct = bh_grid_info.get('bh_length_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
     bh_dep_pct = bh_grid_info.get('bh_depth_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
 
     results_dict = {
+        "Staubli_Tibial_pct": staubli_pct,
         "Tortuosity_Index": tortuosity_idx,
         "ATT_mm": att_mm,
         "BH_Length_pct": bh_len_pct,

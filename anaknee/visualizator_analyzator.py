@@ -182,6 +182,26 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_att_f_pt = pv.PolyData()
         actor_att_measure = pv.PolyData()
 
+    # H. Stäubli Measurement Lines
+    staubli_info = vis_data.get('staubli_info', {})
+    if staubli_info and 'anterior_pt' in staubli_info:
+        ant_pt = staubli_info['anterior_pt']
+        post_pt = staubli_info['posterior_pt']
+        v_ant = staubli_info['v_anterior_sag']
+        
+        actor_staubli_line = pv.Line(ant_pt, post_pt)
+        actor_staubli_ant = pv.Sphere(radius=2.5, center=ant_pt)
+        actor_staubli_post = pv.Sphere(radius=2.5, center=post_pt)
+        
+        cent_proj = np.dot((dummy_tibial_centroid - ant_pt), v_ant)
+        cent_on_line = ant_pt + cent_proj * v_ant
+        actor_staubli_cent_pt = pv.Sphere(radius=2.5, center=cent_on_line)
+    else:
+        actor_staubli_line = pv.PolyData()
+        actor_staubli_ant = pv.PolyData()
+        actor_staubli_post = pv.PolyData()
+        actor_staubli_cent_pt = pv.PolyData()
+
     # =========================================================================
     # 4. PyVista Plotter Setup and Rendering
     # =========================================================================
@@ -227,6 +247,14 @@ def visualize_results(mask_data, spacing, vis_data):
     else:
         actor_att_t = actor_att_f = actor_att_m = None
 
+    if staubli_info and 'anterior_pt' in staubli_info:
+        actor_staubli_l = plotter.add_mesh(actor_staubli_line, color="cyan", line_width=6, label="Stäubli: AP Průměr")
+        actor_staubli_a = plotter.add_mesh(actor_staubli_ant, color="turquoise", label="Stäubli: Přední okraj")
+        actor_staubli_p = plotter.add_mesh(actor_staubli_post, color="turquoise", label="Stäubli: Zadní okraj")
+        actor_staubli_c = plotter.add_mesh(actor_staubli_cent_pt, color="pink", label="Stäubli: Úpon na AP ose")
+    else:
+        actor_staubli_l = actor_staubli_a = actor_staubli_p = actor_staubli_c = None
+
     # Add default interaction tools
     plotter.add_axes()
     plotter.add_legend(bcolor=(1, 1, 1), face='rectangle')
@@ -271,6 +299,13 @@ def visualize_results(mask_data, spacing, vis_data):
             ("ATT: Kolmice Tibie (R)", actor_att_t, "red"),
             ("ATT: Kolmice Femuru (B)", actor_att_f, "blue"),
             ("ATT: Vzdálenost (Y)", actor_att_m, "yellow")
+        ])
+        
+    if staubli_info and 'anterior_pt' in staubli_info:
+        elements.extend([
+            ("Stäubli AP Přímka (C)", actor_staubli_l, "cyan"),
+            ("Stäubli Okraje Tibie", actor_staubli_a, "turquoise"),
+            ("Stäubli Zaměřený Úpon", actor_staubli_c, "pink")
         ])
     
     for i, (name, actor, color_code) in enumerate(elements):

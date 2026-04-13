@@ -21,7 +21,8 @@ def run_pipeline(mri_path, mask_path):
         'plateau_normal': plane_info['normal'],
         'plateau_center': plane_info['center'],
         'bh_grid_info': plane_info.get('bh_grid_info', {}),
-        'att_info': plane_info.get('att_info', {})
+        'att_info': plane_info.get('att_info', {}),
+        'staubli_info': plane_info.get('staubli_info', {})
     }
     
     # 3. Předá data do PyVisty (zde se script pozastaví a vykreslí přesný matematický model, dokud okno nezavřeš)
