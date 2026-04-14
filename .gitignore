@@ -12,3 +12,4 @@ vysledky_modelu/
 *.csv
 *.pth
 *.png
+requirements_full_backup.txt

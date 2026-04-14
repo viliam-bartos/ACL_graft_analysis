@@ -8,7 +8,7 @@ pyvista>=0.47.0
 albumentations>=2.0.0
 torchio>=0.19.0
 segmentation_models_pytorch>=0.3.0
-pyradiomics
+git+https://github.com/AIM-Harvard/pyradiomics.git
 dicom2nifti
 h5py
 pandas
