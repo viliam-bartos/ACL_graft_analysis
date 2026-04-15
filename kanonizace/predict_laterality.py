@@ -1,7 +1,7 @@
 import os
 import argparse
 import torch
-from monai.networks.nets import resnet10
+from monai.networks.nets import resnet18
 from monai.transforms import (
     Compose, 
     LoadImage,
@@ -19,7 +19,7 @@ CONFIG = {
     "model_ckpt": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\checkpoints\best_laterality_model.pth",
     
     # Velikost na kterou byl model trénován
-    "spatial_size": (64, 64, 64)
+    "spatial_size": (96, 96, 96)
 }
 # ==============================================================================
 
@@ -28,11 +28,13 @@ class LateralityClassifier:
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Sestavení sítě (stejně jako při tréninku)
-        self.model = resnet10(
+        self.model = resnet18(
             spatial_dims=3, 
             n_input_channels=1,
-            num_classes=1
+            num_classes=1,
+            norm=("instance", {"affine": True})
         )
+
         
         print(f"Načítám váhy modelu z: {model_path}")
         if os.path.exists(model_path):

@@ -123,15 +123,15 @@ def process_dataset(img_dir, mask_dir, out_img_dir, out_mask_dir, csv_path):
 
 def main():
     # Nastav si vstupní složky
-    img_dir = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\val\images"
-    mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\val\LABELS_VAL"
+    img_dir = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\images"
+    mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\labels"
     
     # Výstupní složky (vytvoří se samy, pokud neexistují)
-    out_img_dir = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\images_val_canonical"
-    out_mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\masks_val_canonical"
+    out_img_dir = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\images_train_full_canonical"
+    out_mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\masks_train_full_canonical"
     
     # Kde se uloží report s detekovanými lateracemi
-    csv_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\analyza_laterality_val.csv"
+    csv_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\analyza_laterality_train_full.csv"
     
     process_dataset(img_dir, mask_dir, out_img_dir, out_mask_dir, csv_path)
 

@@ -4,7 +4,7 @@ from main_acl_analysis import run_analysis
 from visualizator_analyzator import visualize_results
 
 def run_pipeline(mri_path, mask_path):
-    # Dle požadavku, explicitní referenční snímek pro histogram matching:
+    
     ref_path = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_074.nii.gz"
     
     # 1. Spustí matematiku a radiomiku (vrací slovník geometrických/radiomických parametrů, masku, velikost voxelů a parametry rovin)
@@ -25,9 +25,9 @@ def run_pipeline(mri_path, mask_path):
         'staubli_info': plane_info.get('staubli_info', {})
     }
     
-    # 3. Předá data do PyVisty (zde se script pozastaví a vykreslí přesný matematický model, dokud okno nezavřeš)
+    
     visualize_results(mask_array, spacing, vis_data)
 
 if __name__ == "__main__":
-    # Ukázka volání (změňte dle potřeby)
-    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_045.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\LABELS_TRAIN\mask_case_045.nii.gz")
+    
+    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\images\case_153.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\labels\mask_case_153.nii.gz")
