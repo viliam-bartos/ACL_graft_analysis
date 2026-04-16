@@ -30,4 +30,4 @@ def run_pipeline(mri_path, mask_path):
 
 if __name__ == "__main__":
     
-    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\images\case_153.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\labels\mask_case_153.nii.gz")
+    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\images_train_full_canonical\case_032.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\masks_train_full_canonical\mask_case_032.nii.gz")

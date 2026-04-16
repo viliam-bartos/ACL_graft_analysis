@@ -242,10 +242,10 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_att_t = plotter.add_mesh(actor_att_t_line, color="red", line_width=4, label="ATT Kolmice: Tibia")
         actor_att_f = plotter.add_mesh(actor_att_f_line, color="blue", line_width=4, label="ATT Kolmice: Femur")
         actor_att_m = plotter.add_mesh(actor_att_measure, color="yellow", line_width=5, label="ATT Vzdálenost")
-        plotter.add_mesh(actor_att_t_pt, color="red")
-        plotter.add_mesh(actor_att_f_pt, color="blue")
+        actor_att_tp = plotter.add_mesh(actor_att_t_pt, color="red", label="ATT Bod: Tibia")
+        actor_att_fp = plotter.add_mesh(actor_att_f_pt, color="blue", label="ATT Bod: Femur")
     else:
-        actor_att_t = actor_att_f = actor_att_m = None
+        actor_att_t = actor_att_f = actor_att_m = actor_att_tp = actor_att_fp = None
 
     if staubli_info and 'anterior_pt' in staubli_info:
         actor_staubli_l = plotter.add_mesh(actor_staubli_line, color="cyan", line_width=6, label="Stäubli: AP Průměr")
@@ -260,8 +260,12 @@ def visualize_results(mask_data, spacing, vis_data):
     plotter.add_legend(bcolor=(1, 1, 1), face='rectangle')
 
     # Add Interactive Checkbox Toggles for Visibility
-    def toggle_vis(flag, actor):
-        actor.SetVisibility(flag)
+    def toggle_vis(flag, actors):
+        if not isinstance(actors, (list, tuple)):
+            actors = [actors]
+        for actor in actors:
+            if actor is not None:
+                actor.SetVisibility(flag)
     
     start_y = 30
     step = 40
@@ -296,15 +300,15 @@ def visualize_results(mask_data, spacing, vis_data):
         
     if att_info and 'tibia_pt' in att_info:
         elements.extend([
-            ("ATT: Kolmice Tibie (R)", actor_att_t, "red"),
-            ("ATT: Kolmice Femuru (B)", actor_att_f, "blue"),
+            ("ATT: Kolmice Tibie (R)", (actor_att_t, actor_att_tp), "red"),
+            ("ATT: Kolmice Femuru (B)", (actor_att_f, actor_att_fp), "blue"),
             ("ATT: Vzdálenost (Y)", actor_att_m, "yellow")
         ])
         
     if staubli_info and 'anterior_pt' in staubli_info:
         elements.extend([
             ("Stäubli AP Přímka (C)", actor_staubli_l, "cyan"),
-            ("Stäubli Okraje Tibie", actor_staubli_a, "turquoise"),
+            ("Stäubli Okraje Tibie", (actor_staubli_a, actor_staubli_p), "turquoise"),
             ("Stäubli Zaměřený Úpon", actor_staubli_c, "pink")
         ])
     

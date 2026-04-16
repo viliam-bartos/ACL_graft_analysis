@@ -115,9 +115,9 @@ def objective(trial, cached_train_ds, cached_val_ds):
     # Definice Hyperparametrů
     # ------------------
     config = {
-        'patch_size': (224, 224, 128),
+        'patch_size': (128, 128, 128),
         # Architektura a kapacita
-        'base_filters': trial.suggest_categorical("base_filters", [32, 64, 128]),
+        'base_filters': trial.suggest_categorical("base_filters", [16, 32, 64]),
         'dropout': trial.suggest_categorical("dropout", [0.0, 0.1, 0.2, 0.3]),
         
         # Optimalizace
@@ -131,7 +131,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
         'prob_contrast': trial.suggest_categorical("prob_contrast", [0.1, 0.3, 0.5]),
         
         # Pevné nastavení procesu
-        'batch_size': 16, 
+        'batch_size': 4, 
         'epochs': 150,
         'val_interval': 5,
     }
@@ -258,7 +258,7 @@ def main():
         EnsureChannelFirstd(keys=["image", "label"]),
         ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0, b_max=1.0, clip=True),
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
-        SpatialPadd(keys=["image", "label"], spatial_size=(224, 224, 128)),
+        SpatialPadd(keys=["image", "label"], spatial_size=(128, 128, 128)),
     ])
 
     print("Spouštím před-caching na disk (RAM) pro Urychlení ladění...")
@@ -270,7 +270,7 @@ def main():
     # ------------------
     study_name = "Blackwell_ACL_Optimization"
     
-    # Vytvoření study v paměti (bez databáze), výsledky udrží v CSV souboru
+    # Vytvoření study v paměti
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=20, interval_steps=5)
     study = optuna.create_study(
         study_name=study_name, 
@@ -280,11 +280,11 @@ def main():
 
     print(f"Začíná optimalizace... Výsledky se průběžně ukládají do 'optuna_tuning_results.csv'.")
     
-    # Callback automaticky přepisuje (aktualizuje) CSV tabulku na konci každého pokusu
+    
     def save_csv_callback(study, trial):
         study.trials_dataframe().to_csv("optuna_tuning_results.csv", index=False)
 
-    # Zabalení do callable přes lambda aby bylo možné projít náš cached dataset
+    
     study.optimize(
         lambda trial: objective(trial, cached_train_ds, cached_val_ds), 
         n_trials=30,
