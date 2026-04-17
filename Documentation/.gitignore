@@ -1,0 +1,15 @@
+data_train/
+dataset_split/
+puvodni_mr_data/
+labels/
+__pycache__/
+.venv/
+.vscode/
+.idea/
+results_3D/
+vysledky_modelu/
+*.nii.gz
+*.csv
+*.pth
+*.png
+requirements_full_backup.txt
