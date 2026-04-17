@@ -215,7 +215,8 @@ def objective(trial, cached_train_ds, cached_val_ds):
                 best_metric = v_d_acl
                 
             # Report metric for dynamic pruning - Use Optuna to stop unpromising trials
-            trial.report(v_d_acl, epoch)
+            step = epoch // config['val_interval']
+            trial.report(v_d_acl, step)
             if trial.should_prune():
                 print(f"Trial {trial.number} ukončen brzo (Pruned) kvůli nízkému výkonu na Epoše {epoch+1}")
                 raise optuna.exceptions.TrialPruned()
@@ -271,7 +272,8 @@ def main():
     study_name = "Blackwell_ACL_Optimization"
     
     # Vytvoření study v paměti
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=20, interval_steps=5)
+    # Přepočítáno na validační kroky: n_warmup_steps=4 (20 epoch), interval_steps=1 (každá 5. epocha)
+    pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=4, interval_steps=1)
     study = optuna.create_study(
         study_name=study_name, 
         direction="maximize", 

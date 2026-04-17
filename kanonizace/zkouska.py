@@ -4,11 +4,11 @@ import SimpleITK as sitk
 
 def main():
     # Tady si nastavíš cesty natvrdo
-    input_path = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\images\case_030.nii.gz"
-    output_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\case_030_pretoceny.nii.gz"
+    input_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\images_train_full_canonical\case_108.nii.gz"
+    output_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\case_108_pretoceny.nii.gz"
     
-    mask_path = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\labels\mask_case_030.nii.gz"
-    output_mask_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\mask_case_030_pretocena.nii.gz"
+    mask_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\masks_train_full_canonical\mask_case_108.nii.gz"
+    output_mask_path = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\mask_case_108_pretocena.nii.gz"
 
     print(f"Načítám MRI objem z: {input_path}")
     img_sitk = sitk.ReadImage(input_path)
