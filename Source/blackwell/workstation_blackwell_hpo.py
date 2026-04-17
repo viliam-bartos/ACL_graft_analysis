@@ -115,7 +115,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
     # Definice Hyperparametrů
     # ------------------
     config = {
-        'patch_size': (128, 128, 128),
+        'patch_size': (128, 128, 64),
         # Architektura a kapacita
         'base_filters': trial.suggest_categorical("base_filters", [16, 32, 64]),
         'dropout': trial.suggest_categorical("dropout", [0.0, 0.1, 0.2, 0.3]),
@@ -138,7 +138,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
 
     # Dynamické augmentace vytvořené specificky pro parametry tohoto Trialu
     train_augmentations = Compose([
-        RandCropByPosNegLabeld(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], pos=2, neg=1, num_samples=4),
+        RandCropByPosNegLabeld(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], pos=2, neg=1, num_samples=1),
         RandAffined(keys=["image", "label"], prob=config['prob_affine'], rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
         RandGaussianNoised(keys=["image"], prob=config['prob_noise'], mean=0.0, std=0.1),
         RandAdjustContrastd(keys=["image"], prob=config['prob_contrast'], gamma=(0.5, 1.5)),
@@ -151,8 +151,8 @@ def objective(trial, cached_train_ds, cached_val_ds):
     train_ds = Dataset(data=cached_train_ds, transform=train_augmentations)
     val_ds = Dataset(data=cached_val_ds, transform=None)
 
-    train_loader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=16, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8)
+    train_loader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0) # prefetch_factor=1
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=0)
 
     model = LightUNet3D(in_ch=1, out_ch=4, base=config['base_filters'], dropout_rate=config['dropout'])
     if torch.cuda.device_count() > 1:
@@ -233,8 +233,8 @@ def main():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
-    train_img_dir = r"C:\DIPLOM_PRACE\ACL_segment\data_train\images"
-    train_mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\data_train\labels"
+    train_img_dir = r"C:\Users\daniel.bartos\data_hpo\images_hpo"
+    train_mask_dir = r"C:\Users\daniel.bartos\data_hpo\labels_hpo"
 
     all_imgs = sorted(glob.glob(os.path.join(train_img_dir, "*.nii*")))
     all_masks = sorted(glob.glob(os.path.join(train_mask_dir, "*.nii*")))
@@ -263,8 +263,8 @@ def main():
     ])
 
     print("Spouštím před-caching RAM")
-    cached_train_ds = CacheDataset(data=train_files, transform=base_transforms, cache_rate=1.0, num_workers=8)
-    cached_val_ds = CacheDataset(data=val_files, transform=base_transforms, cache_rate=1.0, num_workers=8)
+    cached_train_ds = CacheDataset(data=train_files, transform=base_transforms, cache_rate=1.0, num_workers=0)
+    cached_val_ds = CacheDataset(data=val_files, transform=base_transforms, cache_rate=1.0, num_workers=0)
 
     # ------------------
     # Optuna HPO Setup
@@ -285,6 +285,10 @@ def main():
     
     def save_csv_callback(study, trial):
         study.trials_dataframe().to_csv("optuna_tuning_results.csv", index=False)
+
+    study.enqueue_trial({
+    "base_filters": 64,
+})
 
     
     study.optimize(
