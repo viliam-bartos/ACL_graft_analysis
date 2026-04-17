@@ -144,43 +144,136 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     
     train_epochs = df['Epoch'].dropna()
     train_loss = df['Train_Loss'].dropna()
+    if 'Learning_Rate' in df.columns:
+        learning_rate = df['Learning_Rate'].dropna()
+    else:
+        learning_rate = []
 
     val_df = df.dropna(subset=['Val_Loss'])
     val_epochs = val_df['Epoch']
     val_loss = val_df['Val_Loss']
 
-    plt.figure(figsize=(15, 6))
+    plt.figure(figsize=(18, 12))
     sns.set_theme(style="whitegrid")
     
-    plt.subplot(1, 2, 1)
+    # 1. Graf: Ztrátová funkce (Loss)
+    plt.subplot(2, 2, 1)
     sns.lineplot(x=train_epochs, y=train_loss, label="Trénovací ztráta", linewidth=2.5, color='royalblue')
     if len(val_epochs) > 0:
         sns.lineplot(x=val_epochs, y=val_loss, label="Validační ztráta", linewidth=2.5, marker="o", markersize=6, color='crimson')
-    plt.title(f"Křivky učení (Ztrátová funkce) - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-    plt.ylabel("Hodnota ztráty", fontsize=14, fontweight='bold')
-    plt.tick_params(labelsize=12)
-    plt.legend(fontsize=12, loc='upper right')
+    plt.title(f"Vývoj ztrátové funkce - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
+    plt.ylabel("Hodnota ztráty", fontsize=12, fontweight='bold')
+    plt.tick_params(labelsize=10)
+    plt.legend(fontsize=10, loc='upper right')
     
-    plt.subplot(1, 2, 2)
-    if len(val_epochs) > 0:
-        if 'Val_Dice_ACL' in val_df.columns:
-            sns.lineplot(x=val_epochs, y=val_df['Mean_Dice'], label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
-            sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
-            sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
-            sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
-    
-    plt.title(f"Vývoj multiclass skóre - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-    plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+    # 2. Graf: Dice Skóre
+    plt.subplot(2, 2, 2)
+    if len(val_epochs) > 0 and 'Val_Dice_ACL' in val_df.columns:
+        sns.lineplot(x=val_epochs, y=val_df['Mean_Dice'], label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
+        sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
+        sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
+        sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
+    plt.title(f"Vývoj validovaného Dice skóre - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
+    plt.ylabel("Dice skóre", fontsize=12, fontweight='bold')
     plt.ylim(0, 1)
-    plt.tick_params(labelsize=12)
-    plt.legend(fontsize=12, loc='lower right')
+    plt.tick_params(labelsize=10)
+    plt.legend(fontsize=10, loc='lower right')
+
+    # 3. Graf: HD95 Metric
+    plt.subplot(2, 2, 3)
+    if len(val_epochs) > 0 and 'Val_HD95_ACL' in val_df.columns:
+        sns.lineplot(x=val_epochs, y=val_df['Val_HD95_ACL'], label="ACL HD95", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
+        sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Femur'], label="Femur HD95", color='orange', linewidth=2.0)
+        sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Tibia'], label="Tibia HD95", color='dodgerblue', linewidth=2.0)
+    plt.title(f"Vývoj Hausdorffovy vzdálenosti (HD95) - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
+    plt.ylabel("HD95 [mm] (Nižší je lepší)", fontsize=12, fontweight='bold')
+    plt.yscale('log')
+    plt.tick_params(labelsize=10)
+    plt.legend(fontsize=10, loc='upper right')
+
+    # 4. Graf: Learning Rate
+    plt.subplot(2, 2, 4)
+    if len(learning_rate) > 0:
+        sns.lineplot(x=train_epochs, y=learning_rate, label="Learning Rate", color='purple', linewidth=2.5)
+    plt.title(f"Vývoj Learning Rate - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
+    plt.ylabel("Learning Rate", fontsize=12, fontweight='bold')
+    plt.yscale('log')
+    plt.tick_params(labelsize=10)
+    plt.legend(fontsize=10, loc='upper right')
     
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, f"learning_curve_fold_{fold_idx}.png"), dpi=200, bbox_inches='tight')
     plt.savefig(os.path.join(save_dir, f"learning_curve_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
+
+    # ==========================================
+    # Uložení jednotlivých grafů zvlášť do PDF
+    # ==========================================
+    
+    # 1. Ztrátová funkce (Loss)
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(x=train_epochs, y=train_loss, label="Trénovací ztráta", linewidth=2.5, color='royalblue')
+    if len(val_epochs) > 0:
+        sns.lineplot(x=val_epochs, y=val_loss, label="Validační ztráta", linewidth=2.5, marker="o", markersize=6, color='crimson')
+    plt.title(f"Vývoj ztrátové funkce - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
+    plt.ylabel("Hodnota ztráty", fontsize=14, fontweight='bold')
+    plt.tick_params(labelsize=12)
+    plt.legend(fontsize=12, loc='upper right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"learning_curve_loss_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    # 2. Dice Skóre
+    plt.figure(figsize=(10, 6))
+    if len(val_epochs) > 0 and 'Val_Dice_ACL' in val_df.columns:
+        sns.lineplot(x=val_epochs, y=val_df['Mean_Dice'], label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
+        sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
+        sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
+        sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
+    plt.title(f"Vývoj validovaného Dice skóre - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
+    plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+    plt.ylim(0, 1)
+    plt.tick_params(labelsize=12)
+    plt.legend(fontsize=12, loc='lower right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"learning_curve_dice_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    # 3. HD95 Metric
+    plt.figure(figsize=(10, 6))
+    if len(val_epochs) > 0 and 'Val_HD95_ACL' in val_df.columns:
+        sns.lineplot(x=val_epochs, y=val_df['Val_HD95_ACL'], label="ACL HD95", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
+        sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Femur'], label="Femur HD95", color='orange', linewidth=2.0)
+        sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Tibia'], label="Tibia HD95", color='dodgerblue', linewidth=2.0)
+    plt.title(f"Vývoj Hausdorffovy vzdálenosti (HD95) - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm] (Nižší je lepší)", fontsize=14, fontweight='bold')
+    plt.yscale('log')
+    plt.tick_params(labelsize=12)
+    plt.legend(fontsize=12, loc='upper right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"learning_curve_hd95_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    # 4. Learning Rate
+    if len(learning_rate) > 0:
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(x=train_epochs, y=learning_rate, label="Learning Rate", color='purple', linewidth=2.5)
+        plt.title(f"Vývoj Learning Rate - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+        plt.xlabel("Epocha", fontsize=14, fontweight='bold')
+        plt.ylabel("Learning Rate", fontsize=14, fontweight='bold')
+        plt.yscale('log')
+        plt.tick_params(labelsize=12)
+        plt.legend(fontsize=12, loc='upper right')
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f"learning_curve_lr_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
+        plt.close()
 
 
 def plot_global_cv_results(csv_path, save_dir):

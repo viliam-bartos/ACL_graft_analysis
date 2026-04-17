@@ -131,7 +131,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
         'prob_contrast': trial.suggest_categorical("prob_contrast", [0.1, 0.3, 0.5]),
         
         # Pevné nastavení procesu
-        'batch_size': 4, 
+        'batch_size': 16, 
         'epochs': 150,
         'val_interval': 5,
     }
@@ -262,7 +262,7 @@ def main():
         SpatialPadd(keys=["image", "label"], spatial_size=(128, 128, 128)),
     ])
 
-    print("Spouštím před-caching na disk (RAM) pro Urychlení ladění...")
+    print("Spouštím před-caching RAM")
     cached_train_ds = CacheDataset(data=train_files, transform=base_transforms, cache_rate=1.0, num_workers=8)
     cached_val_ds = CacheDataset(data=val_files, transform=base_transforms, cache_rate=1.0, num_workers=8)
 
@@ -294,7 +294,7 @@ def main():
     )
 
     print("="*40)
-    print("NEJLEPŠÍ IDENTIFIKOVANÉ PARAMETRY (TOP 1):")
+    print("NEJLEPŠÍ IDENTIFIKOVANÉ PARAMETRY:")
     print(study.best_params)
     print(f"S Validačním Dice Skórem ACL: {study.best_value:.4f}")
 
