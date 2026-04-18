@@ -1,9 +1,8 @@
-# Project Name: [Your Project Name]
+# Project Name: Automated ACL Segmentation and 3D Geometric Analysis
 
 ## Project Description
 
-This project, titled **[Project Title]**, is developed by **[Student Name]** under the supervision of **[Supervisor Name]**. The primary objective of this project is to [provide a brief description of the project's goals, scope, and key features].
-
+This project, titled **Automated ACL Segmentation and 3D Geometric Analysis**, is developed by **Viliam Bartoš** under the supervision of **Ing. Jakub Lázňovský, Ph.D.** This project is developed as part of a Diploma Thesis. It provides medical imaging pipeline for the segmentation of the Anterior Cruciate Ligament (ACL), Femur, and Tibia from 3D Isotropic MRI scans. The repository also contains scripts for automated 3D measurement of knee joint geometry.
 ## Repository Setup
 
 1. **Create Initial Issue from Template**

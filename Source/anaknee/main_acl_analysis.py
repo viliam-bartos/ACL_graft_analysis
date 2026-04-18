@@ -635,51 +635,49 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
     
     points_3d = np.column_stack((np.full_like(y_phys, phys_dim0), y_phys, x_phys))
     
-    # Dle definice měříme celkový předozadní rozměr na daném sagitálním řezu
-    # (hledáme nejdelší úsečku od nejvíce anteriorního bodu k nejvíce posteriornímu na tomto řezu)
+    # Měření předozadního rozměru podél vektoru rovnoběžného s tibiálním platem
     
-    # Determine Anterior direction along the sagittal plane
     plane_normal = plane_info.get("normal", np.array([0.0, -1.0, 0.0]))
+    
+    # Směr osy řezu (dim0 = konstanta, tedy osa X neboli R-L [1, 0, 0])
+    slice_normal = np.array([1.0, 0.0, 0.0])
+    
+    # Vektorový součin zajistí, že vektor leží přesně v sagitálním řezu (X=0)
+    # a zároveň je dokonale vodorovný k tibiálnímu platu.
+    v_horizontal = np.cross(plane_normal, slice_normal)
+    
+    if np.linalg.norm(v_horizontal) > 0:
+        v_horizontal = v_horizontal / np.linalg.norm(v_horizontal)
+    else:
+        v_horizontal = np.array([0.0, 0.0, 1.0])
+        
+    # Orientace do anteriorního směru
     acl_vec = np.array(t_centroid) - np.array(f_centroid)
     ap_global = np.array([0.0, 0.0, 1.0])
-    
     if np.dot(ap_global, acl_vec) < 0:
         ap_global = -ap_global
         
-    dot_prod = np.dot(ap_global, plane_normal)
-    v_anterior = ap_global - dot_prod * plane_normal
-    norm_v = np.linalg.norm(v_anterior)
-    
-    if norm_v > 0:
-        v_anterior = v_anterior / norm_v
-    else:
-        v_anterior = ap_global
-        
-    # Project onto sagittal plane exactly (dim0 = 0)
-    v_anterior_sag = np.array([0.0, v_anterior[1], v_anterior[2]])
-    norm_sag = np.linalg.norm(v_anterior_sag)
-    
-    if norm_sag > 0:
-        v_anterior_sag = v_anterior_sag / norm_sag
-    else:
-        v_anterior_sag = ap_global
-        v_anterior_sag[0] = 0.0
-        if np.linalg.norm(v_anterior_sag) > 0:
-            v_anterior_sag = v_anterior_sag / np.linalg.norm(v_anterior_sag)
+    if np.dot(v_horizontal, ap_global) < 0:
+        v_horizontal = -v_horizontal
             
-    # Project points on the AP axis
-    projections = np.dot(points_3d, v_anterior_sag)
+    # Specifikace "vlastního plata" - abychom zabránili tomu, že zadní hrana bude započítána z dolní
+    # části tibiální kosti (kde se zadní kůra často svažuje a rozšiřuje hluboko pod platem), 
+    # omezíme vyhodnocované body pouze na vrchní část (maximálně 20 mm pod vrcholem kosti na řezu).
+    d_up = np.dot(points_3d, plane_normal) # plane_normal směřuje nahoru
+    max_d = np.max(d_up)
+    
+    plateau_slab_mask = d_up >= (max_d - 20.0)
+    plateau_points = points_3d[plateau_slab_mask]
+    
+    # Průmět vybraných "plateau" bodů na vodorovnou osu (místo celé masky kosti)
+    projections = np.dot(plateau_points, v_horizontal)
     
     ant_edge = np.max(projections)
     post_edge = np.min(projections)
     
-    # Find exact 3D points corresponding to these extremes for optional visualization
-    ant_pt_idx = np.argmax(projections)
-    post_pt_idx = np.argmin(projections)
-    ant_pt = points_3d[ant_pt_idx]
-    post_pt = points_3d[post_pt_idx]
-    
-    cent_proj = np.dot(np.array(t_centroid), v_anterior_sag)
+    # Těžiště v sagitální rovině
+    t_cent_slice = np.array([phys_dim0, t_centroid[1], t_centroid[2]])
+    cent_proj = np.dot(t_cent_slice, v_horizontal)
     
     total_ap_length = ant_edge - post_edge
     
@@ -690,10 +688,27 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
     staubli_pct = ((ant_edge - cent_proj) / total_ap_length) * 100.0
     staubli_pct = np.clip(staubli_pct, 0.0, 100.0)
     
+    # Výpočet koncových bodů měřící přímky pro dokonale vodorovné vykreslení
+    # Přímka nyní leží přesně na ploše tibiálního plata (průsečík plata a sagitálního řezu)
+    plane_center = plane_info.get("center", np.array([0.0, 0.0, 0.0]))
+    v_x_plane = np.array([1.0, 0.0, 0.0]) - plane_normal[0] * plane_normal
+    
+    if abs(v_x_plane[0]) > 1e-6:
+        t_intersect = (phys_dim0 - plane_center[0]) / v_x_plane[0]
+        base_pt_on_intersection = plane_center + t_intersect * v_x_plane
+    else:
+        base_pt_on_intersection = np.array([phys_dim0, plane_center[1], plane_center[2]])
+        
+    base_proj = np.dot(base_pt_on_intersection, v_horizontal)
+    line_ortho_plateau = base_pt_on_intersection - (base_proj * v_horizontal)
+    
+    horizontal_ant_pt = line_ortho_plateau + (ant_edge * v_horizontal)
+    horizontal_post_pt = line_ortho_plateau + (post_edge * v_horizontal)
+    
     debug_info = {
-        "anterior_pt": ant_pt,
-        "posterior_pt": post_pt,
-        "v_anterior_sag": v_anterior_sag
+        "anterior_pt": horizontal_ant_pt,
+        "posterior_pt": horizontal_post_pt,
+        "v_anterior_sag": v_horizontal
     }
     
     return float(staubli_pct), debug_info
