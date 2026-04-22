@@ -138,7 +138,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
 
     # Dynamické augmentace vytvořené specificky pro parametry tohoto Trialu
     train_augmentations = Compose([
-        RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
+        RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[0, 2, 1, 1], num_samples=1),
         RandAffined(keys=["image", "label"], prob=config['prob_affine'], rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
         RandGaussianNoised(keys=["image"], prob=config['prob_noise'], mean=0.0, std=0.1),
         RandAdjustContrastd(keys=["image"], prob=config['prob_contrast'], gamma=(0.5, 1.5)),

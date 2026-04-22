@@ -123,7 +123,7 @@ def get_transforms(mode, patch_size):
 
     if mode == 'train':
         augmentations = [
-            RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
+            RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[0, 2, 1, 1], num_samples=1),
             RandAffined(keys=["image", "label"], prob=0.5, rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
             RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.5, 1.5)),
