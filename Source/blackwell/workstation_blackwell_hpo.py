@@ -214,6 +214,10 @@ def objective(trial, cached_train_ds, cached_val_ds):
             if v_d_acl > best_metric:
                 best_metric = v_d_acl
                 
+                # Uložení vah aktuálně nejlepšího modelu pro tento trial
+                save_state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
+                torch.save(save_state, f"best_model_trial_{trial.number}.pth")
+                
             # Report metric for dynamic pruning - Use Optuna to stop unpromising trials
             step = epoch // config['val_interval']
             trial.report(v_d_acl, step)
@@ -299,6 +303,24 @@ def main():
     print("NEJLEPŠÍ IDENTIFIKOVANÉ PARAMETRY:")
     print(study.best_params)
     print(f"S Validačním Dice Skórem ACL: {study.best_value:.4f}")
+
+    # Úklid vah horších trialů a přejmenování vah toho nejlepšího
+    best_trial_num = study.best_trial.number
+    best_model_path = f"best_model_trial_{best_trial_num}.pth"
+    final_model_path = "best_hpo_model.pth"
+    
+    if os.path.exists(best_model_path):
+        if os.path.exists(final_model_path):
+            os.remove(final_model_path)
+        os.rename(best_model_path, final_model_path)
+        print(f"\nVáhy nejlepšího trialu ({best_trial_num}) byly úspěšně uloženy do: {final_model_path}")
+        
+    # Smazání ostatních vah
+    for f in glob.glob("best_model_trial_*.pth"):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
 
 if __name__ == "__main__":
     main()
