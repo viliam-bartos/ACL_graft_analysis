@@ -17,7 +17,7 @@ from monai.data import CacheDataset, Dataset, DataLoader, decollate_batch
 from monai.inferers import sliding_window_inference
 from monai.transforms import (
     Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRangePercentilesd,
-    RandCropByPosNegLabeld, RandAffined, Rand3DElasticd, RandGaussianNoised,
+    RandCropByLabelClassesd, RandAffined, Rand3DElasticd, RandGaussianNoised,
     RandAdjustContrastd, RandBiasFieldd, NormalizeIntensityd, SpatialPadd, AsDiscrete
 )
 from monai.losses import DiceLoss
@@ -117,28 +117,28 @@ def objective(trial, cached_train_ds, cached_val_ds):
     config = {
         'patch_size': (128, 128, 64),
         # Architektura a kapacita
-        'base_filters': trial.suggest_categorical("base_filters", [16, 32, 64]),
-        'dropout': trial.suggest_categorical("dropout", [0.0, 0.1, 0.2, 0.3]),
+        'base_filters': 32,
+        'dropout': trial.suggest_float("dropout", 0.0, 0.3, step=0.1),
         
         # Optimalizace
-        'lr': trial.suggest_float("lr", 1e-4, 5e-3, log=True),
-        'acl_weight': trial.suggest_float("acl_weight", 2.0, 10.0),
+        'lr': trial.suggest_float("lr", 5e-5, 1e-3, log=True),
+        'acl_weight': trial.suggest_float("acl_weight", 2.0, 8.0),
         
-        # Augmentace (Pravděpodobnosti)
-        'prob_affine': trial.suggest_categorical("prob_affine", [0.2, 0.5, 0.8]),
-        'prob_elastic': trial.suggest_categorical("prob_elastic", [0.0, 0.1, 0.2]),
-        'prob_noise': trial.suggest_categorical("prob_noise", [0.1, 0.3, 0.5]),
-        'prob_contrast': trial.suggest_categorical("prob_contrast", [0.1, 0.3, 0.5]),
+        # Augmentace podle nejelšpího trialu z předchozího zkoušení
+        'prob_affine': 0.2,
+        'prob_elastic': 0.1,
+        'prob_noise': 0.1,
+        'prob_contrast': 0.3,
         
         # Pevné nastavení procesu
-        'batch_size': 16, 
+        'batch_size': 16, ## vyzkouset víc
         'epochs': 150,
         'val_interval': 5,
     }
 
     # Dynamické augmentace vytvořené specificky pro parametry tohoto Trialu
     train_augmentations = Compose([
-        RandCropByPosNegLabeld(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], pos=2, neg=1, num_samples=1),
+        RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
         RandAffined(keys=["image", "label"], prob=config['prob_affine'], rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
         RandGaussianNoised(keys=["image"], prob=config['prob_noise'], mean=0.0, std=0.1),
         RandAdjustContrastd(keys=["image"], prob=config['prob_contrast'], gamma=(0.5, 1.5)),
@@ -286,9 +286,7 @@ def main():
     def save_csv_callback(study, trial):
         study.trials_dataframe().to_csv("optuna_tuning_results.csv", index=False)
 
-    study.enqueue_trial({
-    "base_filters": 64,
-})
+
 
     
     study.optimize(

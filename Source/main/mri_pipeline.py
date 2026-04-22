@@ -103,7 +103,7 @@ def resample_image_sitk(sitk_img, target_spacing=(0.5, 0.5, 0.5)):
     """ Resampling do fyzického rozlišení """
     original_spacing = sitk_img.GetSpacing()
     if np.allclose(original_spacing, target_spacing, atol=1e-3):
-        logging.info("  -> Spacing je již ideální, vynechávám resample.")
+        logging.info("  -> Spacing je správný, vynechávám resample.")
         return sitk_img
     
     logging.info(f"  -> Provádím resample z {original_spacing} na {target_spacing}")

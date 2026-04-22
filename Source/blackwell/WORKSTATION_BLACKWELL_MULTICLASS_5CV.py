@@ -17,7 +17,7 @@ from monai.data import CacheDataset, DataLoader, decollate_batch
 from monai.inferers import sliding_window_inference
 from monai.transforms import (
     Compose, LoadImaged, EnsureChannelFirstd, ScaleIntensityRangePercentilesd,
-    RandCropByPosNegLabeld, RandAffined, Rand3DElasticd, RandGaussianNoised,
+    RandCropByLabelClassesd, RandAffined, Rand3DElasticd, RandGaussianNoised,
     RandAdjustContrastd, RandBiasFieldd, NormalizeIntensityd, SpatialPadd, AsDiscrete
 )
 from monai.losses import DiceLoss
@@ -123,7 +123,7 @@ def get_transforms(mode, patch_size):
 
     if mode == 'train':
         augmentations = [
-            RandCropByPosNegLabeld(keys=["image", "label"], label_key="label", spatial_size=patch_size, pos=2, neg=1, num_samples=4),
+            RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
             RandAffined(keys=["image", "label"], prob=0.5, rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
             RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.5, 1.5)),
@@ -319,8 +319,8 @@ def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device
     model = model.to(device)
     model.eval()
 
-    val_ds = CacheDataset(data=val_files, transform=get_transforms('val', config['patch_size']), cache_rate=1.0, num_workers=8)
-    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=8)
+    val_ds = CacheDataset(data=val_files, transform=get_transforms('val', config['patch_size']), cache_rate=1.0, num_workers=0)
+    val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=0)
 
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
     hd95_metric = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean_batch")
@@ -382,8 +382,8 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
     print(f"=========================================")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    workers_train = 0 if TEST_MODE else 16
-    workers_val = 0 if TEST_MODE else 8
+    workers_train = 0
+    workers_val = 0
 
     train_ds = CacheDataset(data=train_files, transform=get_transforms('train', config['patch_size']), cache_rate=1.0, num_workers=workers_val)
     train_loader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=workers_train, pin_memory=not TEST_MODE)
@@ -563,8 +563,8 @@ def main():
         }
     else:
         config = {
-            'patch_size': (224, 224, 128),   
-            'base_filters': 64,              
+            'patch_size': (128, 128, 64),   
+            'base_filters': 32,              
             'lr': 1e-4,
             'epochs': 1000,
             'val_interval': 5,               # Kontrola každou 5. epochu
