@@ -439,7 +439,7 @@ def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device
             
             start_t = time.time()
             with autocast('cuda', dtype=torch.bfloat16):
-                val_outputs = sliding_window_inference(val_images, roi_size=config['patch_size'], sw_batch_size=4, predictor=model, overlap=0.5)
+                val_outputs = sliding_window_inference(val_images, roi_size=config['patch_size'], sw_batch_size=4, predictor=model, overlap=0.5, mode="gaussian")
             inf_time = time.time() - start_t
             
             val_outputs_converted = [post_pred(j) for j in decollate_batch(val_outputs)]
@@ -565,7 +565,7 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
 
                     inf_start = time.time()
                     with autocast('cuda', dtype=torch.bfloat16):
-                        val_outputs = sliding_window_inference(inputs=val_images, roi_size=config['patch_size'], sw_batch_size=4, predictor=model, overlap=0.5)
+                        val_outputs = sliding_window_inference(inputs=val_images, roi_size=config['patch_size'], sw_batch_size=4, predictor=model, overlap=0.5, mode="gaussian")
                         v_loss = loss_function(val_outputs, val_labels)
                         val_loss_sum += v_loss.item()
                     inf_times.append(time.time() - inf_start)
