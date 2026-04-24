@@ -28,7 +28,7 @@ from torch.amp import autocast
 # ----------------------------------------------------
 # Globální nastavení pro Testování kódu
 # ----------------------------------------------------
-TEST_MODE = False
+TEST_MODE = False 
 
 def set_seed(seed=42):
     np.random.seed(seed)
@@ -174,7 +174,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj validovaného Dice skóre - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.title(f"Vývoj validačního Dice skóre - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
     plt.xlabel("Epocha", fontsize=12, fontweight='bold')
     plt.ylabel("Dice skóre", fontsize=12, fontweight='bold')
     plt.ylim(0, 1)
@@ -236,7 +236,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj validovaného Dice skóre - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.title(f"Vývoj validačního Dice skóre - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
     plt.xlabel("Epocha", fontsize=14, fontweight='bold')
     plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
     plt.ylim(0, 1)
@@ -253,7 +253,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_ACL'], label="ACL HD95", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Femur'], label="Femur HD95", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Tibia'], label="Tibia HD95", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj Hausdorffovy vzdálenosti (HD95) - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.title(f"Vývoj validační Hausdorffovy vzdálenosti (HD95) - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
     plt.xlabel("Epocha", fontsize=14, fontweight='bold')
     plt.ylabel("HD95 [mm] (Nižší je lepší)", fontsize=14, fontweight='bold')
     plt.yscale('log')
@@ -638,8 +638,8 @@ def main():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
-    train_img_dir = r"C:\DIPLOM_PRACE\ACL_segment\data_train\images"
-    train_mask_dir = r"C:\DIPLOM_PRACE\ACL_segment\data_train\labels"
+    train_img_dir = r"A:\DATA_optimalizace\images_hpo"
+    train_mask_dir = r"A:\DATA_optimalizace\labels_hpo"
     base_save_dir = 'results_blackwell_cv'
     os.makedirs(base_save_dir, exist_ok=True)
     global_cv_csv_path = os.path.join(base_save_dir, 'cv_individual_results.csv')

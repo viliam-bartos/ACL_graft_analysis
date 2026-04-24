@@ -61,3 +61,5 @@ vysledky_modelu/
 *.csv
 *.pth
 *.png
+*.pdf
+*.json

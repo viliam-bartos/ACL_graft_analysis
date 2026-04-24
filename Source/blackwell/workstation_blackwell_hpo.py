@@ -117,7 +117,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
     config = {
         'patch_size': (128, 128, 64),
         # Architektura a kapacita
-        'base_filters': 32,
+        'base_filters': 64,
         'dropout': trial.suggest_float("dropout", 0.0, 0.3, step=0.1),
         
         # Optimalizace
@@ -127,7 +127,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
         # Augmentace podle nejelšpího trialu z předchozího zkoušení
         'prob_affine': 0.2,
         'prob_elastic': 0.1,
-        'prob_noise': 0.1,
+        'prob_noise': 0.3,
         'prob_contrast': 0.3,
         
         # Pevné nastavení procesu
@@ -138,7 +138,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
 
     # Dynamické augmentace vytvořené specificky pro parametry tohoto Trialu
     train_augmentations = Compose([
-        RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[0, 2, 1, 1], num_samples=1),
+        RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
         RandAffined(keys=["image", "label"], prob=config['prob_affine'], rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
         RandGaussianNoised(keys=["image"], prob=config['prob_noise'], mean=0.0, std=0.1),
         RandAdjustContrastd(keys=["image"], prob=config['prob_contrast'], gamma=(0.5, 1.5)),
@@ -237,8 +237,8 @@ def main():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
-    train_img_dir = r"C:\Users\daniel.bartos\data_hpo\images_hpo"
-    train_mask_dir = r"C:\Users\daniel.bartos\data_hpo\labels_hpo"
+    train_img_dir = r"A:\DATA_optimalizace\images_hpo"
+    train_mask_dir = r"A:\DATA_optimalizace\labels_hpo"
 
     all_imgs = sorted(glob.glob(os.path.join(train_img_dir, "*.nii*")))
     all_masks = sorted(glob.glob(os.path.join(train_mask_dir, "*.nii*")))
