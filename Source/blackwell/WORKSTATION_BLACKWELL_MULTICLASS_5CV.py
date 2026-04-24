@@ -225,6 +225,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='upper right')
     plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"learning_curve_loss_fold_{fold_idx}.png"), dpi=200, bbox_inches='tight')
     plt.savefig(os.path.join(save_dir, f"learning_curve_loss_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
@@ -242,6 +243,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='lower right')
     plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"learning_curve_dice_fold_{fold_idx}.png"), dpi=200, bbox_inches='tight')
     plt.savefig(os.path.join(save_dir, f"learning_curve_dice_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
@@ -258,6 +260,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='upper right')
     plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f"learning_curve_hd95_fold_{fold_idx}.png"), dpi=200, bbox_inches='tight')
     plt.savefig(os.path.join(save_dir, f"learning_curve_hd95_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
@@ -272,6 +275,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
         plt.tick_params(labelsize=12)
         plt.legend(fontsize=12, loc='upper right')
         plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f"learning_curve_lr_fold_{fold_idx}.png"), dpi=200, bbox_inches='tight')
         plt.savefig(os.path.join(save_dir, f"learning_curve_lr_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
         plt.close()
 
@@ -281,9 +285,9 @@ def plot_global_cv_results(csv_path, save_dir):
     df = pd.read_csv(csv_path)
     if df.empty: return
 
+    # 1. Klasický Boxplot
     plt.figure(figsize=(18, 8))
     sns.set_theme(style="whitegrid")
-    
     plt.subplot(1, 2, 1)
     sns.boxplot(data=df, x="Fold", y="Dice", hue="Struktura", palette="tab10", linewidth=1.5)
     plt.title("Křížová validace: 4-Class Testovací Dice", fontsize=18, fontweight='bold', pad=15)
@@ -301,11 +305,111 @@ def plot_global_cv_results(csv_path, save_dir):
     plt.yscale('log')
     plt.tick_params(labelsize=12)
     plt.legend(title="Orgán", fontsize=10)
-    
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, "global_cv_boxplot.png"), dpi=200, bbox_inches='tight')
     plt.savefig(os.path.join(save_dir, "global_cv_boxplot.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
+
+    # 2. Violin Plot + Swarm Plot (Hustota distribuce)
+    plt.figure(figsize=(14, 8))
+    sns.violinplot(data=df, x="Struktura", y="Dice", inner=None, color=".8", linewidth=0)
+    sns.swarmplot(data=df, x="Struktura", y="Dice", hue="Fold", palette="Set2", size=6, alpha=0.8)
+    plt.title("Hustota distribuce Dice skóre (Violin + Swarm plot)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Struktura", fontsize=14, fontweight='bold')
+    plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+    plt.ylim(0.0, 1.0)
+    plt.legend(title="Fold", bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "global_cv_violin_dice.png"), dpi=200, bbox_inches='tight')
+    plt.savefig(os.path.join(save_dir, "global_cv_violin_dice.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    plt.figure(figsize=(14, 8))
+    sns.violinplot(data=df, x="Struktura", y="HD95 [mm]", inner=None, color=".8", linewidth=0)
+    sns.swarmplot(data=df, x="Struktura", y="HD95 [mm]", hue="Fold", palette="Set2", size=6, alpha=0.8)
+    plt.title("Hustota distribuce HD95 (Violin + Swarm plot)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Struktura", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm] (Log scale)", fontsize=14, fontweight='bold')
+    plt.yscale('log')
+    plt.legend(title="Fold", bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "global_cv_violin_hd95.png"), dpi=200, bbox_inches='tight')
+    plt.savefig(os.path.join(save_dir, "global_cv_violin_hd95.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    # 3. Scatter Plot (Dice vs HD95)
+    plt.figure(figsize=(12, 8))
+    sns.scatterplot(data=df, x="Dice", y="HD95 [mm]", hue="Struktura", style="Fold", palette="tab10", s=150, alpha=0.7)
+    plt.title("Scatter Plot: Přesnost (Dice) vs Odlehlé chyby (HD95)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Dice skóre (Vyšší je lepší)", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm] (Nižší je lepší, Log scale)", fontsize=14, fontweight='bold')
+    plt.xlim(0.0, 1.0)
+    plt.yscale('log')
+    plt.grid(True, which="both", ls="--", alpha=0.5)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "global_cv_scatter_dice_vs_hd95.png"), dpi=200, bbox_inches='tight')
+    plt.savefig(os.path.join(save_dir, "global_cv_scatter_dice_vs_hd95.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    # 4. Inference Time Analysis
+    if 'Inference_Time_s' in df.columns:
+        plt.figure(figsize=(10, 6))
+        sns.boxplot(data=df, x="Fold", y="Inference_Time_s", color="lightgray", width=0.5)
+        sns.stripplot(data=df, x="Fold", y="Inference_Time_s", color="red", alpha=0.6, jitter=True, size=8)
+        plt.title("Analýza času inference 3D obrazu", fontsize=18, fontweight='bold', pad=15)
+        plt.xlabel("Testovaný Fold", fontsize=14, fontweight='bold')
+        plt.ylabel("Čas inference [s]", fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, "global_cv_inference_time.png"), dpi=200, bbox_inches='tight')
+        plt.savefig(os.path.join(save_dir, "global_cv_inference_time.pdf"), format='pdf', bbox_inches='tight')
+        plt.close()
+
+def plot_global_learning_curves(run_dir, num_folds, save_dir):
+    all_dfs = []
+    for fold_idx in range(1, num_folds + 1):
+        csv_path = os.path.join(run_dir, f"log_fold_{fold_idx}.csv")
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+            df['Fold'] = fold_idx
+            all_dfs.append(df)
+            
+    if not all_dfs: return
+    combined_df = pd.concat(all_dfs, ignore_index=True)
+    val_df = combined_df.dropna(subset=['Val_Loss'])
+    
+    # 1. Průměrná Ztrátová funkce (Loss)
+    plt.figure(figsize=(10, 6))
+    sns.lineplot(data=combined_df, x="Epoch", y="Train_Loss", label="Trénovací ztráta", linewidth=2.5, color='royalblue')
+    if not val_df.empty:
+        sns.lineplot(data=val_df, x="Epoch", y="Val_Loss", label="Validační ztráta", linewidth=2.5, marker="o", markersize=6, color='crimson')
+    plt.title("Globální vývoj ztrátové funkce (všechny foldy)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
+    plt.ylabel("Hodnota ztráty", fontsize=14, fontweight='bold')
+    plt.tick_params(labelsize=12)
+    plt.legend(fontsize=12, loc='upper right')
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "global_learning_curve_loss.png"), dpi=200, bbox_inches='tight')
+    plt.savefig(os.path.join(save_dir, "global_learning_curve_loss.pdf"), format='pdf', bbox_inches='tight')
+    plt.close()
+
+    # 2. Průměrné Dice skóre
+    if not val_df.empty and 'Val_Dice_ACL' in val_df.columns:
+        plt.figure(figsize=(10, 6))
+        sns.lineplot(data=val_df, x="Epoch", y="Mean_Dice", label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
+        sns.lineplot(data=val_df, x="Epoch", y="Val_Dice_ACL", label="ACL Dice", color='forestgreen', linewidth=2.5)
+        sns.lineplot(data=val_df, x="Epoch", y="Val_Dice_Femur", label="Femur Dice", color='orange', linewidth=2.0)
+        sns.lineplot(data=val_df, x="Epoch", y="Val_Dice_Tibia", label="Tibia Dice", color='dodgerblue', linewidth=2.0)
+        plt.title("Globální vývoj Dice skóre ze všech foldů", fontsize=18, fontweight='bold', pad=15)
+        plt.xlabel("Epocha", fontsize=14, fontweight='bold')
+        plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+        plt.ylim(0, 1)
+        plt.tick_params(labelsize=12)
+        plt.legend(fontsize=12, loc='lower right')
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, "global_learning_curve_dice.png"), dpi=200, bbox_inches='tight')
+        plt.savefig(os.path.join(save_dir, "global_learning_curve_dice.pdf"), format='pdf', bbox_inches='tight')
+        plt.close()
 
 
 # ----------------------------------------------------
@@ -596,9 +700,11 @@ def main():
     print(f"TRÉNINK DOKONČEN. Průměrné nejlepší Dice čistě pro ACL ze všech foldů: {avg_dice:.4f}")
     
     if os.path.exists(global_cv_csv_path):
-        print("Vykreslování finálních globálních CV boxplotů per-class...")
+        print("Vykreslování finálních globálních grafů pro analýzu...")
         plot_global_cv_results(global_cv_csv_path, base_save_dir)
-        print("Grafy uloženy")
+        num_folds_used = 5 if not TEST_MODE else 2
+        plot_global_learning_curves(run_dir, num_folds_used, base_save_dir)
+        print("Všechny grafy úspěšně vygenerovány a uloženy.")
 
 if __name__ == "__main__":
     main()
