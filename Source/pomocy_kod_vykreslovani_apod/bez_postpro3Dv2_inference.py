@@ -14,18 +14,18 @@ from monai.data import Dataset, DataLoader
 # 1. MANUÁLNÍ NASTAVENÍ CEST
 # ==========================================
 # Vstupní data
-IMG_PATH = r"C:\DIPLOM_PRACE\ACL_segment\data_train\images\case003.nii.gz"
-MASK_PATH = r"C:\DIPLOM_PRACE\ACL_segment\data_train\labels\case003.nii.gz"
+IMG_PATH = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\images_train_full_canonical\case_001.nii.gz"
+MASK_PATH = r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\masks_train_full_canonical\mask_case_001.nii.gz"
 
 # Kam uložit výsledek
-OUTPUT_PATH = "case003_RAW.nii.gz"
+OUTPUT_PATH = "case001_RAW_optuna.nii.gz"
 
 # Cesta k modelu
-MODEL_PATH = r"C:\DIPLOM_PRACE\ACL_segment\results_3D_CV\fold_2\best_model.pth"
+MODEL_PATH = r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Optuna_best_model_150ep\best_model_trial_1.pth"
 
 CONFIG = {
     'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'patch_size': (128, 128, 32),
+    'patch_size': (128, 128, 64),
 }
 
 
@@ -47,7 +47,7 @@ class ResBlock(nn.Module):
 
 
 class LightUNet3D(nn.Module):
-    def __init__(self, in_ch=1, out_ch=1, base=16):
+    def __init__(self, in_ch=1, out_ch=4, base=64):
         super().__init__()
         self.enc1 = ResBlock(in_ch, base)
         self.enc2 = ResBlock(base, base * 2)
@@ -99,7 +99,7 @@ def main():
     ds = Dataset(data=data_dict, transform=transforms)
     loader = DataLoader(ds, batch_size=1, shuffle=False)
 
-    model = LightUNet3D(in_ch=1, out_ch=1, base=16).to(CONFIG['device'])
+    model = LightUNet3D(in_ch=1, out_ch=4, base=64).to(CONFIG['device'])
     checkpoint = torch.load(MODEL_PATH, map_location=CONFIG['device'])
     if 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -118,22 +118,27 @@ def main():
                 sw_batch_size=4,
                 predictor=model,
                 overlap=0.5,
-                mode='constant'
+                mode='gaussian'
             )
 
-            pred = (torch.sigmoid(output) > 0.5).float()
-
-            inter = (pred * label_gt).sum()
-            union = pred.sum() + label_gt.sum()
-            dice = 2.0 * inter / union
+            pred = torch.argmax(output, dim=1)
 
             print("=" * 30)
-            print(f"DICE SKÓRE: {dice.item():.6f}")
+            # DICE pro všechny třídy
+            class_names = {1: "ACL", 2: "Femur", 3: "Tibie"}
+            for class_id, class_name in class_names.items():
+                pred_c = (pred == class_id).float()
+                label_c = (label_gt.squeeze(1) == class_id).float()
+                
+                inter = (pred_c * label_c).sum()
+                union = pred_c.sum() + label_c.sum()
+                dice = 2.0 * inter / union if union > 0 else torch.tensor(1.0)
+                print(f"DICE SKÓRE ({class_name}): {dice.item():.6f}")
             print("=" * 30)
 
             print(f"Ukládám masku do: {OUTPUT_PATH}")
 
-            pred_np = pred.cpu().numpy()[0, 0].astype(np.uint8)
+            pred_np = pred.cpu().numpy()[0].astype(np.uint8)
 
             # --- OPRAVA ZDE ---
             # V novém MONAI je 'affine' přímo vlastností MetaTensoru (img), ne ve slovníku

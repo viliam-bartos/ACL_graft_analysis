@@ -58,7 +58,7 @@ class ResBlock(nn.Module):
 
 
 class LightUNet3D(nn.Module):
-    def __init__(self, in_ch=1, out_ch=4, base=64, dropout_rate=0.2):
+    def __init__(self, in_ch=1, out_ch=4, base=64, dropout_rate=0.1):
         super().__init__()
         self.enc1 = ResBlock(in_ch, base)
         self.enc2 = ResBlock(base, base * 2)
@@ -123,9 +123,9 @@ def get_transforms(mode, patch_size):
 
     if mode == 'train':
         augmentations = [
-            RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[0, 2, 1, 1], num_samples=1),
-            RandAffined(keys=["image", "label"], prob=0.5, rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
-            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.1),
+            RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=patch_size, num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
+            RandAffined(keys=["image", "label"], prob=0.2, rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
+            RandGaussianNoised(keys=["image"], prob=0.1, mean=0.0, std=0.1),
             RandAdjustContrastd(keys=["image"], prob=0.3, gamma=(0.5, 1.5)),
             RandBiasFieldd(keys=["image"], prob=0.2, degree=3, coeff_range=(0.3, 0.5)),
             Rand3DElasticd(keys=["image", "label"], sigma_range=(5, 8), magnitude_range=(80, 100), prob=0.1, mode=("bilinear", "nearest"), padding_mode="zeros"),
@@ -314,8 +314,8 @@ def plot_global_cv_results(csv_path, save_dir):
 def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device, global_csv_path):
     print(f"\n[Testovací Fáze] Vyhodnocování nejlepšího modelu foldu {fold_idx}")
     model = LightUNet3D(in_ch=1, out_ch=4, base=config['base_filters'], dropout_rate=config['dropout'])
-    if torch.cuda.device_count() > 1: model = nn.DataParallel(model)
     model.load_state_dict(torch.load(best_model_path))
+    if torch.cuda.device_count() > 1: model = nn.DataParallel(model)
     model = model.to(device)
     model.eval()
 
@@ -398,8 +398,8 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
         model = nn.DataParallel(model)
     model = model.to(device)
 
-    # Inicializace robustní Loss funkce s váhami (ACL je na indexu 1, proto dostane vahu 5.0)
-    class_weights = torch.tensor([0.1, 5.0, 1.0, 1.0], dtype=torch.float32, device=device)
+    
+    class_weights = torch.tensor([0.1, 2.9925236028121227, 1.0, 1.0], dtype=torch.float32, device=device)
     loss_function = WeightedDiceCELoss(class_weights)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=1e-5)
@@ -503,7 +503,7 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
                 state_dict = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
                 torch.save(state_dict, best_model_path)
             else:
-                patience_counter += config['val_interval']
+                patience_counter += 1
 
         current_lr = optimizer.param_groups[0]['lr']
         with open(csv_path, 'a', newline='', encoding='utf-8') as f:
@@ -559,19 +559,19 @@ def main():
             'batch_size': 2,
             'patience': 2,
             'lr_patience': 1,
-            'dropout': 0.2
+            'dropout': 0.1
         }
     else:
         config = {
             'patch_size': (128, 128, 64),   
-            'base_filters': 32,              
-            'lr': 1e-4,
+            'base_filters': 64,              
+            'lr': 0.00010052642570664155,
             'epochs': 1000,
             'val_interval': 5,               # Kontrola každou 5. epochu
             'batch_size': 16,                 
             'patience': 40,                  # Early stop po: 40 kroků * 5 = 200 epoch bez zlepšení
             'lr_patience': 20,               # Snížení rychlosti učení po: 20 kroků * 5 = 100 epoch
-            'dropout': 0.2                  
+            'dropout': 0.1                  
         }
 
     run_dir = os.path.join(base_save_dir, "Main_Run")

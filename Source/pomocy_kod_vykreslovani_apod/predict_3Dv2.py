@@ -158,11 +158,11 @@ def process_patient(model_path, input_nifti_path, output_path, device='cuda'):
         with torch.no_grad():
             output_tensor = sliding_window_inference(
                 inputs=input_tensor,
-                roi_size=(128, 128, 32),
+                roi_size=(128, 128, 64),
                 sw_batch_size=4,
                 predictor=model,
                 overlap=0.5,
-                mode='constant',  # Pro inferenci lepší než constant, pokud chceš hezčí přechody
+                mode='gaussian',  # Pro inferenci lepší než constant, pokud chceš hezčí přechody
                 device=device
             )
             output_mask = torch.argmax(output_tensor, dim=1)
