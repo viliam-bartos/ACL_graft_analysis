@@ -441,7 +441,7 @@ def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device
             
             start_t = time.time()
             with autocast('cuda', dtype=torch.bfloat16):
-                val_outputs = sliding_window_inference(val_images, roi_size=config['patch_size'], sw_batch_size=16, predictor=model, overlap=0.5, mode="gaussian")
+                val_outputs = sliding_window_inference(val_images, roi_size=config['patch_size'], sw_batch_size=32, predictor=model, overlap=0.25, mode="gaussian")
             inf_time = time.time() - start_t
             
             val_outputs_converted = [post_pred(j) for j in decollate_batch(val_outputs)]
@@ -567,7 +567,7 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
 
                     inf_start = time.time()
                     with autocast('cuda', dtype=torch.bfloat16):
-                        val_outputs = sliding_window_inference(inputs=val_images, roi_size=config['patch_size'], sw_batch_size=16, predictor=model, overlap=0.5, mode="gaussian")
+                        val_outputs = sliding_window_inference(inputs=val_images, roi_size=config['patch_size'], sw_batch_size=32, predictor=model, overlap=0.25, mode="gaussian")
                         v_loss = loss_function(val_outputs, val_labels)
                         val_loss_sum += v_loss.item()
                     inf_times.append(time.time() - inf_start)
@@ -669,14 +669,14 @@ def main():
         }
     else:
         config = {
-            'patch_size': (128, 128, 64),   
+            'patch_size': (128, 128, 80),   
             'base_filters': 64,              
             'lr': 0.00010052642570664155,
             'epochs': 1000,
-            'val_interval': 5,               # Kontrola každou 5. epochu
+            'val_interval': 10,               # Kontrola každou 10. epochu
             'batch_size': 16,                 
-            'patience': 40,                  # Early stop po: 40 kroků * 5 = 200 epoch bez zlepšení
-            'lr_patience': 20,               # Snížení rychlosti učení po: 20 kroků * 5 = 100 epoch
+            'patience': 15,                  # Early stop po: 15 kroků * 10 = 150 epoch bez zlepšení
+            'lr_patience': 8,               # Snížení rychlosti učení po: 8 kroků * 10 = 80 epoch
             'dropout': 0.1                  
         }
 
