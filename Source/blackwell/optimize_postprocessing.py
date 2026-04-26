@@ -209,10 +209,10 @@ def objective(trial):
     t_femur = trial.suggest_float('t_femur', 0.1, 0.9)
     t_tibia = trial.suggest_float('t_tibia', 0.1, 0.9)
 
-    dice_metric = DiceMetric(include_background=False, reduction="mean")
+    dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
     
     # 2. Rychlá smyčka přes data v RAM
-    for data in GLOBAL_CACHED_DATA:
+    for data in tqdm(GLOBAL_CACHED_DATA, desc=f"Zpracování Trialu {trial.number}", leave=False):
         probs = data['probs'] # [4, H, W, D]
         label = data['label'] # [H, W, D] (hodnoty 0, 1, 2, 3)
 
