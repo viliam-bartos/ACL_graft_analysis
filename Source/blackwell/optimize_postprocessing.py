@@ -147,7 +147,7 @@ def precompute_logits():
 
         with torch.no_grad():
             from torch.amp import autocast
-            for val_batch in tqdm(val_loader, desc=f"Cachování Fold {fold_id}"):
+            for i, val_batch in enumerate(tqdm(val_loader, desc=f"Cachování Fold {fold_id}")):
                 val_images = val_batch["image"].to(device)
                 val_labels = val_batch["label"] # Necháme na CPU
                 
@@ -157,7 +157,7 @@ def precompute_logits():
                 probs = torch.softmax(val_outputs, dim=1).cpu().squeeze(0) # Tvar: [4, H, W, D]
                 label = val_labels.cpu().squeeze(0).squeeze(0) # Tvar: [H, W, D]
 
-                basename = os.path.basename(val_batch["image_meta_dict"]["filename_or_obj"][0]).replace('.nii.gz', '.pt')
+                basename = os.path.basename(files_to_process[i]["image"]).replace('.nii.gz', '.pt')
                 save_path = os.path.join(fold_cache_dir, basename)
                 
                 # Uložíme tensor pravděpodobností a originální label
@@ -172,6 +172,23 @@ def precompute_logits():
 # ----------------------------------------------------
 # Fáze 2: Post-processing a Optuna
 # ----------------------------------------------------
+GLOBAL_CACHED_DATA = []
+
+def load_all_to_ram():
+    print("\n--- NAČÍTÁNÍ PREDICÍ DO 1TB RAM PRO MAXIMÁLNÍ RYCHLOST ---")
+    cached_files = glob.glob(os.path.join(CACHE_DIR, "fold_*", "*.pt"))
+    if not cached_files:
+        raise RuntimeError("Žádné nacachované predikce nebyly nalezeny!")
+    
+    global GLOBAL_CACHED_DATA
+    for f_path in tqdm(cached_files, desc="Načítání do RAM"):
+        data = torch.load(f_path)
+        GLOBAL_CACHED_DATA.append({
+            'probs': data['probs'],  # Uloženo v RAM
+            'label': data['label']   # Uloženo v RAM
+        })
+    print(f"Úspěšně načteno {len(GLOBAL_CACHED_DATA)} pacientů do RAM. Optuna poletí bleskově!")
+
 def apply_morphology(mask_tensor):
     # Hole filling (funguje na CPU numpy poli)
     mask_np = mask_tensor.numpy()
@@ -194,13 +211,8 @@ def objective(trial):
 
     dice_metric = DiceMetric(include_background=False, reduction="mean")
     
-    # Projdeme všechny nacachované soubory napříč foldy
-    cached_files = glob.glob(os.path.join(CACHE_DIR, "fold_*", "*.pt"))
-    if not cached_files:
-        raise RuntimeError("Žádné nacachované predikce nebyly nalezeny!")
-
-    for f_path in cached_files:
-        data = torch.load(f_path)
+    # 2. Rychlá smyčka přes data v RAM
+    for data in GLOBAL_CACHED_DATA:
         probs = data['probs'] # [4, H, W, D]
         label = data['label'] # [H, W, D] (hodnoty 0, 1, 2, 3)
 
@@ -303,7 +315,10 @@ def main():
     # 2. Vykreslit PR AUC z uložených dat
     calculate_pr_auc()
     
-    # 3. Spustit Optunu
+    # 3. Načtení dat do RAM
+    load_all_to_ram()
+    
+    # 4. Spustit Optunu
     print("\n--- FÁZE 2: OPTUNA POST-PROCESSING ---")
     study = optuna.create_study(direction='maximize')
     study.optimize(objective, n_trials=30)
