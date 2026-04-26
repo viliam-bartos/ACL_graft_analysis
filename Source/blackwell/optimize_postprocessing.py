@@ -182,7 +182,7 @@ def load_all_to_ram():
     
     global GLOBAL_CACHED_DATA
     for f_path in tqdm(cached_files, desc="Načítání do RAM"):
-        data = torch.load(f_path)
+        data = torch.load(f_path, weights_only=False)
         GLOBAL_CACHED_DATA.append({
             'probs': data['probs'],  # Uloženo v RAM
             'label': data['label']   # Uloženo v RAM
@@ -278,7 +278,7 @@ def calculate_pr_auc():
     y_true_acl, y_prob_acl = [], []
     
     for f_path in tqdm(sample_files, desc="Načítání do PR křivky"):
-        data = torch.load(f_path)
+        data = torch.load(f_path, weights_only=False)
         probs = data['probs'][1].numpy().flatten() # Pravděpodobnost ACL
         label = (data['label'].numpy().flatten() == 1).astype(int) # Binární label ACL
         
