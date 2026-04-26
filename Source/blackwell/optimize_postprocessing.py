@@ -175,8 +175,9 @@ def precompute_logits():
 GLOBAL_CACHED_DATA = []
 
 def load_all_to_ram():
-    print("\n--- NAČÍTÁNÍ PREDICÍ DO 1TB RAM PRO MAXIMÁLNÍ RYCHLOST ---")
-    cached_files = glob.glob(os.path.join(CACHE_DIR, "fold_*", "*.pt"))
+    print("\n--- NAČÍTÁNÍ PREDICÍ POUZE PRO FOLD 1 (BLESKOVÁ OPTIMALIZACE) ---")
+    # Načteme schválně jen Fold 1 pro maximální rychlost
+    cached_files = glob.glob(os.path.join(CACHE_DIR, "fold_1", "*.pt"))
     if not cached_files:
         raise RuntimeError("Žádné nacachované predikce nebyly nalezeny!")
     
@@ -250,19 +251,17 @@ def objective(trial):
 
         dice_metric(y_pred=pred_onehot, y=label_onehot)
 
-    # Vyhodnocení
-    # Vrátíme průměrné Dice pro ACL (index 0 v mean batch), případně průměr všech tříd
-    # Zde maximalizujeme průměr Dice všech tříd, aby Optuna neobětovala kosti kvůli ACL
+    # Trial reportne detailní skóre
     dice_scores = dice_metric.aggregate() # Tvar [3] (ACL, Femur, Tibia)
-    mean_dice = torch.mean(dice_scores).item()
     
-    # Trial reportne detailní skóre, i když optimalizuje jen průměr
     trial.set_user_attr("Dice_ACL", dice_scores[0].item())
     trial.set_user_attr("Dice_Femur", dice_scores[1].item())
     trial.set_user_attr("Dice_Tibia", dice_scores[2].item())
     
     dice_metric.reset()
-    return mean_dice
+    
+    # Vrátíme 3 oddělená čísla. Optuna bude hledat tzv. Pareto frontu (nejlepší možné kombinace pro všechny 3).
+    return dice_scores[0].item(), dice_scores[1].item(), dice_scores[2].item()
 
 
 # ----------------------------------------------------
@@ -315,25 +314,22 @@ def main():
     # 2. Vykreslit PR AUC z uložených dat
     calculate_pr_auc()
     
-    # 3. Načtení dat do RAM
+    # 3. Načtení dat do RAM (Pouze Fold 1)
     load_all_to_ram()
     
-    # 4. Spustit Optunu
+    # 4. Spustit Optunu s multi-objective (hledáme 3 nejlepší hodnoty zároveň)
     print("\n--- FÁZE 2: OPTUNA POST-PROCESSING ---")
-    study = optuna.create_study(direction='maximize')
-    study.optimize(objective, n_trials=30)
+    study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
+    study.optimize(objective, n_trials=50) # Zvýšíme na 50, protože to teď na 1 foldu poletí bleskově
     
     print("\n--- HOTOVO ---")
-    print(f"Nejlepší průměrné Dice: {study.best_value:.4f}")
-    print("Nejlepší parametry:")
-    for key, value in study.best_params.items():
-        print(f"  {key}: {value}")
+    print("Nalezeny tyto absolutně nejlepší kombinace (Pareto fronta):")
     
-    best_trial = study.best_trial
-    print(f"Detaily nejlepšího pokusu:")
-    print(f"  ACL Dice: {best_trial.user_attrs['Dice_ACL']:.4f}")
-    print(f"  Femur Dice: {best_trial.user_attrs['Dice_Femur']:.4f}")
-    print(f"  Tibia Dice: {best_trial.user_attrs['Dice_Tibia']:.4f}")
+    best_trials = study.best_trials
+    for i, bt in enumerate(best_trials):
+        print(f"\nVarianta {i+1}:")
+        print(f"  Prahy: t_acl={bt.params['t_acl']:.3f}, t_femur={bt.params['t_femur']:.3f}, t_tibia={bt.params['t_tibia']:.3f}")
+        print(f"  Výsledek: ACL={bt.values[0]:.4f}, Femur={bt.values[1]:.4f}, Tibia={bt.values[2]:.4f}")
 
 if __name__ == "__main__":
     main()
