@@ -4,7 +4,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-import optuna
 import multiprocessing
 from sklearn.model_selection import KFold
 from sklearn.metrics import precision_recall_curve, auc
@@ -204,65 +203,108 @@ def apply_morphology(mask_tensor):
     
     return torch.from_numpy(mask_np).bool()
 
-def objective(trial):
-    # 1. Nezávislé prahy z Optuny
-    t_acl = trial.suggest_float('t_acl', 0.1, 0.9)
-    t_femur = trial.suggest_float('t_femur', 0.1, 0.9)
-    t_tibia = trial.suggest_float('t_tibia', 0.1, 0.9)
-
+def evaluate_thresholds(t_acl, t_femur, t_tibia):
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
     
-    # 2. Rychlá smyčka přes data v RAM
-    for data in tqdm(GLOBAL_CACHED_DATA, desc=f"Zpracování Trialu {trial.number}", leave=False):
+    for data in GLOBAL_CACHED_DATA:
         probs = data['probs'] # [4, H, W, D]
-        label = data['label'] # [H, W, D] (hodnoty 0, 1, 2, 3)
+        label = data['label'] # [H, W, D]
 
-        # 2. Prahování do binárních masek
+        # Prahování do binárních masek
         m_acl = probs[1] > t_acl
         m_fem = probs[2] > t_femur
         m_tib = probs[3] > t_tibia
 
-        # 3. Morfologie (CCA a Hole filling pro kosti)
+        # Morfologie (CCA a Hole filling pro kosti)
         m_fem = apply_morphology(m_fem)
         m_tib = apply_morphology(m_tib)
 
-        # 4. Overlap Check (Rozřešení kolizí pomocí Surových pravděpodobností)
+        # Overlap Check (Rozřešení kolizí)
         final_pred = torch.zeros_like(label, dtype=torch.uint8)
-        
-        # Seskupíme masky
-        stacked_masks = torch.stack([m_acl, m_fem, m_tib], dim=0) # [3, H, W, D]
-        # Vytáhneme k nim relevantní pravděpodobnosti
-        relevant_probs = probs[1:4] # [3, H, W, D]
-        
-        # Zamaskujeme pravděpodobnosti tak, aby "přežily" jen tam, kde pixel prošel prahem
+        stacked_masks = torch.stack([m_acl, m_fem, m_tib], dim=0)
+        relevant_probs = probs[1:4]
         masked_probs = relevant_probs * stacked_masks
         
-        # Zjistíme "vítěze" pro každý pixel (index 0=ACL, 1=Femur, 2=Tibia)
-        winners = torch.argmax(masked_probs, dim=0) # [H, W, D]
-        
-        # Aplikujeme vítěze pouze na pixely, které prošly alespoň jedním prahem
+        winners = torch.argmax(masked_probs, dim=0)
         any_mask = stacked_masks.any(dim=0)
-        final_pred[any_mask] = winners[any_mask].byte() + 1 # +1 protože ACL je 1, pozadí je 0
+        final_pred[any_mask] = winners[any_mask].byte() + 1 
 
-        # Převedeme do One-Hot pro DiceMetric z MONAI
         from monai.networks.utils import one_hot
-        pred_onehot = one_hot(final_pred.unsqueeze(0).unsqueeze(0), num_classes=4) # [1, 4, H, W, D]
-        label_onehot = one_hot(label.unsqueeze(0).unsqueeze(0), num_classes=4)     # [1, 4, H, W, D]
+        pred_onehot = one_hot(final_pred.unsqueeze(0).unsqueeze(0), num_classes=4)
+        label_onehot = one_hot(label.unsqueeze(0).unsqueeze(0), num_classes=4)
 
         dice_metric(y_pred=pred_onehot, y=label_onehot)
 
-    # Trial reportne detailní skóre
-    dice_scores = dice_metric.aggregate() # Tvar [3] (ACL, Femur, Tibia)
-    
-    trial.set_user_attr("Dice_ACL", dice_scores[0].item())
-    trial.set_user_attr("Dice_Femur", dice_scores[1].item())
-    trial.set_user_attr("Dice_Tibia", dice_scores[2].item())
-    
+    dice_scores = dice_metric.aggregate() 
     dice_metric.reset()
-    
-    # Vrátíme 3 oddělená čísla. Optuna bude hledat tzv. Pareto frontu (nejlepší možné kombinace pro všechny 3).
     return dice_scores[0].item(), dice_scores[1].item(), dice_scores[2].item()
 
+
+def run_threshold_sweep():
+    print("\n--- FÁZE 2: SYSTEMATICKÝ THRESHOLD SWEEP ---")
+    thresholds = np.arange(0.05, 0.96, 0.05) # 0.05, 0.10, ..., 0.95
+    
+    # 1. Sweep ACL
+    print("\n-> Sweep pro ACL (Kosti fixovány na 0.5)")
+    acl_scores = []
+    for t in tqdm(thresholds, desc="ACL Sweep"):
+        d_acl, _, _ = evaluate_thresholds(t, 0.5, 0.5)
+        acl_scores.append(d_acl)
+        
+    # 2. Sweep Femur
+    print("\n-> Sweep pro Femur (ACL a Tibia fixovány na 0.5)")
+    femur_scores = []
+    for t in tqdm(thresholds, desc="Femur Sweep"):
+        _, d_fem, _ = evaluate_thresholds(0.5, t, 0.5)
+        femur_scores.append(d_fem)
+        
+    # 3. Sweep Tibia
+    print("\n-> Sweep pro Tibii (ACL a Femur fixovány na 0.5)")
+    tibia_scores = []
+    for t in tqdm(thresholds, desc="Tibia Sweep"):
+        _, _, d_tib = evaluate_thresholds(0.5, 0.5, t)
+        tibia_scores.append(d_tib)
+        
+    # Vykreslení grafů
+    print("\n--- Vykreslování vědeckých grafů ---")
+    plt.figure(figsize=(15, 5))
+    
+    plt.subplot(1, 3, 1)
+    plt.plot(thresholds, acl_scores, marker='o', color='red', linewidth=2)
+    plt.title('Vliv prahování na Křížový vaz (ACL)')
+    plt.xlabel('Práh (Threshold)')
+    plt.ylabel('Dice Score')
+    plt.grid(True)
+    
+    plt.subplot(1, 3, 2)
+    plt.plot(thresholds, femur_scores, marker='o', color='blue', linewidth=2)
+    plt.title('Vliv prahování na Stehenní kost (Femur)')
+    plt.xlabel('Práh (Threshold)')
+    plt.ylabel('Dice Score')
+    plt.grid(True)
+    
+    plt.subplot(1, 3, 3)
+    plt.plot(thresholds, tibia_scores, marker='o', color='green', linewidth=2)
+    plt.title('Vliv prahování na Holenní kost (Tibia)')
+    plt.xlabel('Práh (Threshold)')
+    plt.ylabel('Dice Score')
+    plt.grid(True)
+    
+    plt.tight_layout()
+    plt.savefig('threshold_sweep_results.png', dpi=300)
+    
+    # Nalezení a vypsání maxim
+    best_acl_idx = np.argmax(acl_scores)
+    best_fem_idx = np.argmax(femur_scores)
+    best_tib_idx = np.argmax(tibia_scores)
+    
+    print("\n=========================================")
+    print("NALEZENÉ OPTIMÁLNÍ PRAHY (Thresholds):")
+    print(f"Nejlepší práh pro ACL:   {thresholds[best_acl_idx]:.2f} (Max Dice: {acl_scores[best_acl_idx]:.4f})")
+    print(f"Nejlepší práh pro Femur: {thresholds[best_fem_idx]:.2f} (Max Dice: {femur_scores[best_fem_idx]:.4f})")
+    print(f"Nejlepší práh pro Tibii: {thresholds[best_tib_idx]:.2f} (Max Dice: {tibia_scores[best_tib_idx]:.4f})")
+    print("=========================================")
+    print("Graf s výsledky byl úspěšně uložen jako 'threshold_sweep_results.png'.")
 
 # ----------------------------------------------------
 # PR AUC Výpočet
@@ -271,17 +313,15 @@ def calculate_pr_auc():
     print("\n--- Počítám PR AUC z raw dat ---")
     cached_files = glob.glob(os.path.join(CACHE_DIR, "fold_*", "*.pt"))
     
-    # Vezmeme např. prvních 10 pacientů, aby nám nespadla RAM (150 objemů = stovky GB floatů)
     sample_files = cached_files[:10]
     
     y_true_acl, y_prob_acl = [], []
     
     for f_path in tqdm(sample_files, desc="Načítání do PR křivky"):
         data = torch.load(f_path, weights_only=False)
-        probs = data['probs'][1].numpy().flatten() # Pravděpodobnost ACL
-        label = (data['label'].numpy().flatten() == 1).astype(int) # Binární label ACL
+        probs = data['probs'][1].numpy().flatten()
+        label = (data['label'].numpy().flatten() == 1).astype(int)
         
-        # Vezmeme jen každý 10. pixel pro úsporu paměti
         y_true_acl.append(label[::10])
         y_prob_acl.append(probs[::10])
         
@@ -298,7 +338,7 @@ def calculate_pr_auc():
     plt.title('Precision-Recall Curve (ACL)')
     plt.legend(loc='lower left')
     plt.grid(True)
-    plt.savefig('acl_pr_auc.png')
+    plt.savefig('acl_pr_auc.png', dpi=300)
     print(f"PR AUC pro ACL = {pr_auc:.4f}. Graf uložen jako acl_pr_auc.png")
 
 
@@ -308,28 +348,17 @@ def calculate_pr_auc():
 def main():
     multiprocessing.freeze_support()
     
-    # 1. Předpočítat data
+    # 1. Předpočítat data (Fáze 1)
     precompute_logits()
     
-    # 2. Vykreslit PR AUC z uložených dat
+    # 2. Vykreslit PR AUC (Volitelně, vezme data z disku)
     calculate_pr_auc()
     
-    # 3. Načtení dat do RAM (Pouze Fold 1)
+    # 3. Načtení dat do RAM (Pouze Fold 1 pro maximální rychlost Sweepu)
     load_all_to_ram()
     
-    # 4. Spustit Optunu s multi-objective (hledáme 3 nejlepší hodnoty zároveň)
-    print("\n--- FÁZE 2: OPTUNA POST-PROCESSING ---")
-    study = optuna.create_study(directions=['maximize', 'maximize', 'maximize'])
-    study.optimize(objective, n_trials=50) # Zvýšíme na 50, protože to teď na 1 foldu poletí bleskově
-    
-    print("\n--- HOTOVO ---")
-    print("Nalezeny tyto absolutně nejlepší kombinace (Pareto fronta):")
-    
-    best_trials = study.best_trials
-    for i, bt in enumerate(best_trials):
-        print(f"\nVarianta {i+1}:")
-        print(f"  Prahy: t_acl={bt.params['t_acl']:.3f}, t_femur={bt.params['t_femur']:.3f}, t_tibia={bt.params['t_tibia']:.3f}")
-        print(f"  Výsledek: ACL={bt.values[0]:.4f}, Femur={bt.values[1]:.4f}, Tibia={bt.values[2]:.4f}")
+    # 4. Spustit Systematický Threshold Sweep
+    run_threshold_sweep()
 
 if __name__ == "__main__":
     main()
