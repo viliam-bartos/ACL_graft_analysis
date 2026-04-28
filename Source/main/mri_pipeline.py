@@ -42,9 +42,9 @@ from visualizator_analyzator import visualize_results
 CONFIG = {
     # ZÁKLADNÍ MÓD A CESTY
     "mode": "FOLDER",  # "FILE" nebo "FOLDER"
-    "input_path": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\example_input.nii.gz", # Použije se pro FILE
-    "input_dir": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data",                      # Použije se pro FOLDER
-    "output_dir": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Output",
+    "input_path": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR", # Použije se pro FILE
+    "input_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR",                      # Použije se pro FOLDER
+    "output_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_optuna",
     "log_file": "pipeline.log", # Vytvoří se uvnitř output_dir
     
     # ANAKNEE
@@ -54,9 +54,9 @@ CONFIG = {
     "gt_masks_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels",
     
     # MODEL SÍŤ (Blackwell a Kanonizace)
-    "model_ckpt": r"C:\DIPLOM_PRACE\ACL_segment\blackwell\checkpoints\best_model.pth", 
+    "model_ckpt": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Optuna_best_model_150ep\best_model_trial_1.pth", 
     "kanonizace_ckpt": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\checkpoints\best_laterality_model.pth",
-    "patch_size": (224, 224, 128),
+    "patch_size": (128, 128, 80),
     "base_filters": 64,
     
     # PŘEPÍNAČE MODULŮ (Zapínat/Vypínat dle potřeby)
@@ -66,8 +66,8 @@ CONFIG = {
     "run_inference": True,
     "run_postprocessing": True,
     "run_inverse_transform": True,
-    "run_segmentation_analysis": True,
-    "run_anatomical_analysis": True,
+    "run_segmentation_analysis": False,
+    "run_anatomical_analysis": False,
     
     # POST-PROCESSING TŘÍDY
     # 1: ACL, 2: Femur, 3: Tibia
@@ -175,9 +175,12 @@ def postprocess_mask(mask_array, config_classes):
 
 def infer_model(img_path, model, device, config):
     """ Inference sekce s monai sliding window """
-    # MONAI používá (C, Z, Y, X). Load a EnsureChannelFirst provedeme ručně nebo přes sitk pro izolaci
+    # SimpleITK vrací (Z, Y, X). MONAI a náš model očekávají (X, Y, Z).
     sitk_img = sitk.ReadImage(img_path)
     img_array = sitk.GetArrayFromImage(sitk_img).astype(np.float32)
+    
+    # Transpozice z (Z, Y, X) do (X, Y, Z) pro model
+    img_array = np.transpose(img_array, (2, 1, 0))
     
     # Skálování intenzit (MONAI ScaleIntensityRangePercentilesd logika)
     p05 = np.percentile(img_array, 0.5)
@@ -190,7 +193,7 @@ def infer_model(img_path, model, device, config):
     if np.any(non_zero):
         img_array[non_zero] = (img_array[non_zero] - img_array[non_zero].mean()) / (img_array[non_zero].std() + 1e-8)
         
-    # Tvorba tenzoru (B, C, Z, Y, X)
+    # Tvorba tenzoru (B, C, X, Y, Z)
     tensor = torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).to(device)
     
     model.eval()
@@ -199,15 +202,21 @@ def infer_model(img_path, model, device, config):
             outputs = sliding_window_inference(
                 inputs=tensor, 
                 roi_size=config["patch_size"], 
-                sw_batch_size=4, 
+                sw_batch_size=2, 
                 predictor=model, 
-                overlap=0.5
+                overlap=0.5,
+                mode='gaussian'
             )
         
         # Argmax převede z OHE pravděpodobností zpět na labely
         pred = torch.argmax(outputs, dim=1).squeeze(0).squeeze(0)
         
-    return pred.cpu().numpy()
+    pred_np = pred.cpu().numpy()
+    
+    # Transpozice zpět z (X, Y, Z) do (Z, Y, X) pro uložení přes SimpleITK
+    pred_np = np.transpose(pred_np, (2, 1, 0))
+    
+    return pred_np
 
 def perform_segmentation_analysis(output_dir, gt_dir):
     """ Výpočet Dice/HD95 pomocí monai """
@@ -432,6 +441,14 @@ def process_single_volume(file_path, lat_classifier, model, device, run_viz_at_e
         except Exception as e:
              logging.error(f"Při Anaknee analýze došlo k problému: {e}")
              traceback.print_exc()
+
+    # 8. ÚKLID DOČASNÝCH SOUBORŮ
+    if os.path.exists(temp_nifti_path):
+        try:
+            os.remove(temp_nifti_path)
+            logging.info(f"  -> Smazán dočasný soubor: {os.path.basename(temp_nifti_path)}")
+        except Exception as e:
+            logging.warning(f"  -> Nepodařilo se smazat dočasný soubor {temp_nifti_path}: {e}")
 
 def main():
     setup_logging(CONFIG["output_dir"], CONFIG["log_file"])

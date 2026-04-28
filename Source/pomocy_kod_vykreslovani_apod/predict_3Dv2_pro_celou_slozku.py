@@ -31,7 +31,7 @@ class ResBlock(nn.Module):
 
 
 class LightUNet3D(nn.Module):
-    def __init__(self, in_ch=1, out_ch=4, base=32):
+    def __init__(self, in_ch=1, out_ch=4, base=64):
         super().__init__()
         self.enc1 = ResBlock(in_ch, base)
         self.enc2 = ResBlock(base, base * 2)
@@ -52,7 +52,7 @@ class LightUNet3D(nn.Module):
         self.dec1 = ResBlock(base * 2, base)
 
         self.final = nn.Conv3d(base, out_ch, kernel_size=1)
-        self.dropout = nn.Dropout3d(0.2)
+        self.dropout = nn.Dropout3d(0.1)
 
     def forward(self, x):
         x1 = self.enc1(x)
@@ -119,11 +119,11 @@ def process_patient(model, input_path, output_path, transforms, device):
         with torch.no_grad():
             output_tensor = sliding_window_inference(
                 inputs=input_tensor,
-                roi_size=(128, 128, 32),
-                sw_batch_size=4,
+                roi_size=(128, 128, 80),
+                sw_batch_size=1,
                 predictor=model,
                 overlap=0.5,
-                mode='constant',
+                mode='gaussian',
                 device=device
             )
             output_mask = torch.argmax(output_tensor, dim=1)
@@ -146,9 +146,9 @@ def process_patient(model, input_path, output_path, transforms, device):
 # SPUŠTĚNÍ
 # ==========================================
 if __name__ == "__main__":
-    MODEL_PATH = r"C:\DIPLOM_PRACE\ACL_segment\results_3D_v3\best_model.pth"
-    INPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\val\images_ASR")
-    OUTPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\val\base32_v2")
+    MODEL_PATH = r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Optuna_best_model_150ep\best_model_trial_1.pth"
+    INPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR")
+    OUTPUT_DIR = Path(r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_optuna")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -159,7 +159,7 @@ if __name__ == "__main__":
 
     print("Načítám model...")
     # 4 kanály a 32 base filters dle nové architektury
-    model = LightUNet3D(in_ch=1, out_ch=4, base=32).to(DEVICE)
+    model = LightUNet3D(in_ch=1, out_ch=4, base=64).to(DEVICE)
     checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
     if 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         EnsureChannelFirstd(keys=["image"]),
         ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0, b_max=1.0, clip=True),
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
-        SpatialPadd(keys=["image"], spatial_size=(128, 128, 32)),
+        SpatialPadd(keys=["image"], spatial_size=(128, 128, 80)),
     ])
 
     files = [f for f in INPUT_DIR.rglob("*") if f.is_file() and f.name.endswith(('.nii', '.nii.gz'))]
