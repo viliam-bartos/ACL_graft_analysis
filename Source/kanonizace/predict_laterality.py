@@ -58,9 +58,9 @@ class LateralityClassifier:
         ])
 
     def predict(self, image_path):
-        """Provede predikci pro konkrétní NIfTI soubor a vrátí text 'Left' nebo 'Right'."""
+        """Provede predikci pro konkrétní NIfTI soubor a vrátí (text 'Left'/'Right', probability)."""
         if not os.path.exists(image_path):
-            return f"Soubor nenalezen: {image_path}"
+            return f"Soubor nenalezen: {image_path}", 0.5
             
         # Převedení snímku sekvencí transformací na tenzor a přesun na GPU
         input_tensor = self.transforms(image_path)
@@ -72,7 +72,7 @@ class LateralityClassifier:
             
         # Náš dataset měl Right=1.0, Left=0.0
         predicted_class = "Right" if prob > 0.5 else "Left"
-        return predicted_class
+        return predicted_class, prob
 
 
 def main():

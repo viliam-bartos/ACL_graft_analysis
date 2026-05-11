@@ -63,7 +63,7 @@ class LateralityClassifier:
         ])
 
     def predict(self, image_path):
-        """Provede predikci pro konkrétní NIfTI soubor a vrátí 'Left' nebo 'Right'."""
+        """Provede predikci pro konkrétní NIfTI soubor a vrátí (text 'Left'/'Right', probability)."""
         input_tensor = self.transforms(image_path)
         input_tensor = input_tensor.unsqueeze(0).to(self.device) # Zabalení do batche
         
@@ -72,7 +72,8 @@ class LateralityClassifier:
             prob = torch.sigmoid(output).item()
             
         # Náš dataset měl Right=1.0, Left=0.0
-        return "Right" if prob > 0.5 else "Left"
+        predicted_class = "Right" if prob > 0.5 else "Left"
+        return predicted_class, prob
 
 
 def main():
@@ -104,14 +105,14 @@ def main():
     with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
         # Zápis hlavičky
-        writer.writerow(["ID", "Laterality"]) 
+        writer.writerow(["ID", "Laterality", "Probability"]) 
         
         # Iterace přes soubory s visualním progress barem
         for file in tqdm(files, desc="Zpracovávám MRI objemy", unit="snímek"):
             img_path = os.path.join(images_dir, file)
             try:
-                prediction = classifier.predict(img_path)
-                writer.writerow([file, prediction])
+                prediction, prob = classifier.predict(img_path)
+                writer.writerow([file, prediction, f"{prob:.4f}"])
                 csvfile.flush() # Okamžitý zápis na disk
             except Exception as e:
                 print(f"\n[CHYBA] Selhala predikce pro {file}: {e}")

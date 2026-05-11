@@ -423,8 +423,11 @@ def process_single_volume(file_path, lat_classifier, model, device, run_viz_at_e
     # 3. KANONIZACE / LATERALITA
     is_flipped = False
     if CONFIG["run_canonization"] and lat_classifier:
-        laterality = lat_classifier.predict(temp_nifti_path)
-        logging.info(f"  -> Laterality predikována jako: {laterality}")
+        laterality, prob = lat_classifier.predict(temp_nifti_path)
+        logging.info(f"  -> Laterality predikována jako: {laterality} (pravděpodobnost: {prob:.4f})")
+        
+        if 0.4 <= prob <= 0.6:
+            logging.warning(f"  !!! POZOR: Model si není jistý lateralitou (prob={prob:.4f}). Zkontrolujte výsledek!")
         
         if laterality == "Right":
             logging.info("  -> Provádím zrcadlení pro Inference do LEVÉHO uspořádání (axis=0).")
