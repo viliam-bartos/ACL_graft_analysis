@@ -16,7 +16,7 @@ import seaborn as sns
 
 import torch
 from monai.inferers import sliding_window_inference
-from monai.metrics import DiceMetric, HausdorffDistanceMetric
+from monai.metrics import DiceMetric, HausdorffDistanceMetric, compute_hausdorff_distance
 from monai.transforms import AsDiscrete
 from monai.data import decollate_batch
 
@@ -44,17 +44,17 @@ CONFIG = {
     "mode": "FOLDER",  # "FILE" nebo "FOLDER"
     "input_path": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR", # Použije se pro FILE
     "input_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR",                      # Použije se pro FOLDER
-    "output_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_optuna",
+    "output_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_eval_5cv_bez_postprocessingu",
     "log_file": "pipeline.log", # Vytvoří se uvnitř output_dir
     
     # ANAKNEE
     "anaknee_ref_mri": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_074.nii.gz",
     
     # GROUND TRUTH A ANALÝZA METRIK
-    "gt_masks_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels",
+    "gt_masks_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_optuna",
     
     # MODEL SÍŤ (Blackwell a Kanonizace)
-    "model_ckpt": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Optuna_best_model_150ep\best_model_trial_1.pth", 
+    "model_ckpt": r"", 
     "kanonizace_ckpt": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\checkpoints\best_laterality_model.pth",
     "patch_size": (128, 128, 80),
     "base_filters": 64,
@@ -67,13 +67,13 @@ CONFIG = {
     "ensemble_pattern": "best_model_fold_*.pth",  # glob vzor pro vyhledávání vah foldů
     
     # PŘEPÍNAČE MODULŮ (Zapínat/Vypínat dle potřeby)
-    "run_resampling": True,
-    "run_orientation": True,
-    "run_canonization": True,
-    "run_inference": True,
-    "run_postprocessing": True,
-    "run_inverse_transform": True,
-    "run_segmentation_analysis": False,
+    "run_resampling": 0,
+    "run_orientation": 0,
+    "run_canonization": 0,
+    "run_inference": 0,
+    "run_postprocessing": False,
+    "run_inverse_transform": 0,
+    "run_segmentation_analysis": True,
     "run_anatomical_analysis": False,
     
     # POST-PROCESSING TŘÍDY
@@ -276,7 +276,13 @@ def infer_ensemble(img_path, ensemble_models, device, config):
                     overlap=0.5,
                     mode='gaussian'
                 )
-            fold_probs = torch.softmax(outputs, dim=1).squeeze(0)  # [4, X, Y, Z]
+            # 1. Odstranění z VRAM ihned po výpočtu do klasické RAM
+            fold_probs = torch.softmax(outputs, dim=1).squeeze(0).cpu()  
+            
+            # 2. Uvolnění GPU paměti pro další fold
+            del outputs
+            torch.cuda.empty_cache()
+            
             logging.info(f"     Fold {fold_idx + 1}/{len(ensemble_models)} hotov.")
             
             if accumulated_probs is None:
@@ -330,18 +336,31 @@ def perform_segmentation_analysis(output_dir, gt_dir):
             # Převedení do OHE a přidání dimenzí Batche a Channelu
             p_t = post_func(torch.from_numpy(p_arr).unsqueeze(0))
             g_t = post_func(torch.from_numpy(g_arr).unsqueeze(0))
+            # Zjištění fyzického spacingu z aktuálního NIfTI souboru (SimpleITK vrací tuple (dx, dy, dz))
+            dx, dy, dz = p_sitk.GetSpacing()
+            # Tenzory pro MONAI z Numpy mají tvar (Z, Y, X), takže spacing musíme do metriky poslat v tomtéž pořadí
+            spacing_zyx = [dz, dy, dx]
             
-            # Tyto metriky vyžadují tvar: Množství Batch tensors jako List
+            # Výpočet Dice beze změny
             dice_metric(y_pred=[p_t], y=[g_t])
-            hd95_metric(y_pred=[p_t], y=[g_t])
-            
             dice = dice_metric.get_buffer()[-1]     
-            hd95 = hd95_metric.get_buffer()[-1]
+            
+            # Přímý výpočet HD95 s použitím naměřeného fyzického spacingu
+            hd95_tensor = compute_hausdorff_distance(
+                y_pred=p_t.unsqueeze(0), 
+                y=g_t.unsqueeze(0), 
+                include_background=False, 
+                percentile=95, 
+                spacing=spacing_zyx
+            )
+            hd95 = hd95_tensor[0] # Výsledek má tvar [3] pro ACL, Femur, Tibii
             
             for class_idx, class_name in enumerate(["ACL", "Femur", "Tibia"]):
                 d_val = dice[class_idx].item() if not torch.isnan(dice[class_idx]) else 0.0
-                try: h_val = hd95[class_idx].item()
-                except: h_val = float('nan')
+                try: 
+                    h_val = hd95[class_idx].item()
+                except: 
+                    h_val = float('nan')
                 
                 results.append({
                     "Soubor": basename,
