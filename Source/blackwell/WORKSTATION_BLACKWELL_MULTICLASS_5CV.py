@@ -633,7 +633,7 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
     if os.path.exists(best_model_path):
         test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device, global_cv_csv_path)
 
-    # Důkladné uvolnění paměti a VRAM mezi foldy
+    
     del model
     del optimizer
     del train_loader
@@ -703,14 +703,13 @@ def main():
 
     kf = KFold(n_splits=5 if not TEST_MODE else 2, shuffle=True, random_state=42)
 
-    START_FOLD = 4  # ZMĚŇTE NA ČÍSLO FOLDU, VE KTERÉM TO SPADLO (např. 4)
+    START_FOLD = 0
 
     fold_metrics = []
     for fold_idx, (train_idx, val_idx) in enumerate(kf.split(all_imgs)):
         fold_id = fold_idx + 1
 
         if fold_id < START_FOLD:
-            print(f"--- Přeskakuji hotový Fold {fold_id} a zachraňuji Vašich {fold_id * 6} hodin práce ---")
             continue
 
         train_files = [{"image": img, "label": mask} for img, mask in zip(all_imgs[train_idx], all_masks[train_idx])]

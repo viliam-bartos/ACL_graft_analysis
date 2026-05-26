@@ -1,3 +1,0 @@
-NEJLEPŠÍ IDENTIFIKOVANÉ PARAMETRY:
-{'base_filters': 64, 'dropout': 0.1, 'lr': 0.0002891910858428538, 'acl_weight': 6.530434663231901, 'prob_affine': 0.2, 'prob_elastic': 0.1, 'prob_noise': 0.3, 'prob_contrast': 0.3}
-S Validačním Dice Skórem ACL: 0.7915

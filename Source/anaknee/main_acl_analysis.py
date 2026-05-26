@@ -71,37 +71,74 @@ def match_histograms(img_sitk, ref_path, mask_sitk=None):
     
     return standardized_sitk
 
-def get_tibial_plateau_plane(tibia_mask, spacing):
+def get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=None, top_fraction=0.25):
+    """
+    Robust estimation of the tibial plateau plane.
+
+    - Computes the tibia long axis by PCA in physical coordinates.
+    - Selects the top fraction of voxels along that long axis (towards the proximal_point
+      if provided) to represent the plateau surface.
+    - Fits a plane to those top points (SVD) and returns its normal and centroid.
+
+    Args:
+        tibia_mask (np.ndarray): boolean mask of tibia voxels (in voxel coords)
+        spacing (tuple): voxel spacing (sz, sy, sx) in mm
+        proximal_point (iterable, optional): physical coordinate (x,y,z) pointing towards femur
+        top_fraction (float): fraction of voxels to take from the proximal end
+
+    Returns:
+        normal (np.ndarray): unit normal vector of the fitted plateau plane (physical coords)
+        centroid (np.ndarray): physical centroid of the selected plateau points
+    """
     sR, sS, sA = spacing
     coords = np.argwhere(tibia_mask)
     if len(coords) == 0:
         return np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 0.0])
-        
+
     phys_coords = coords * np.array([sR, sS, sA])
-    
-    # Sort by the S-axis (Superior-Inferior, column 1). S=0 is Superior.
-    sorted_indices = np.argsort(phys_coords[:, 1])
-    sorted_phys_coords = phys_coords[sorted_indices]
-    
-    # Take the top 15% of voxels to calculate the orientation
-    n_top = int(len(sorted_phys_coords) * 0.15)
-    if n_top < 3:
-        n_top = min(3, len(sorted_phys_coords))
-        
-    top_points = sorted_phys_coords[:n_top]
-    
+
+    # PCA to determine tibia long axis (largest variance direction)
+    mean_all = phys_coords.mean(axis=0)
+    centered_all = phys_coords - mean_all
+    try:
+        _, _, vh_all = np.linalg.svd(centered_all, full_matrices=False)
+        long_axis = vh_all[0, :]
+    except Exception:
+        # Fallback to anatomical S-axis if PCA fails
+        long_axis = np.array([0.0, 1.0, 0.0])
+
+    # If a proximal_point (e.g. femur centroid) is provided, orient long_axis towards it
+    if proximal_point is not None:
+        vec_to_prox = np.array(proximal_point) - mean_all
+        if np.dot(long_axis, vec_to_prox) < 0:
+            long_axis = -long_axis
+
+    # Project all tibia points onto the long axis and take the top_fraction of them
+    projections = phys_coords.dot(long_axis)
+    n_top = max(3, int(len(projections) * float(top_fraction)))
+    # take the voxels with largest projection (proximal end)
+    top_idx = np.argsort(projections)[-n_top:]
+    top_points = phys_coords[top_idx]
+
     if len(top_points) >= 3:
         centroid = top_points.mean(axis=0)
         centered = top_points - centroid
-        u, s, vh = np.linalg.svd(centered, full_matrices=False)
-        normal = vh[2, :] 
+        _, _, vh = np.linalg.svd(centered, full_matrices=False)
+        normal = vh[-1, :]
     else:
         centroid = phys_coords.mean(axis=0)
         normal = np.array([0.0, -1.0, 0.0])
-        
-    if normal[1] > 0:
-        normal = -normal
-        
+
+    # Orient normal to point towards proximal_point (femur) if available
+    if proximal_point is not None:
+        if np.dot(normal, np.array(proximal_point) - centroid) < 0:
+            normal = -normal
+
+    # Ensure normalized
+    nrm = np.linalg.norm(normal)
+    if nrm > 0:
+        normal = normal / nrm
+
     return normal, centroid
 
 def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_center_dim0=None):
@@ -109,18 +146,18 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
     f_dim0, f_dim1, f_dim2 = fem_vox
     t_dim0, t_dim1, t_dim2 = tib_vox
     
-    # 1. Dynamický posun do středu fossy (podle těžiště ACL)
+    # 1. Shift to fossa center (by ACL centroid)
     if acl_center_dim0 is not None and not np.isnan(acl_center_dim0):
         slice_dim0 = int(np.round(acl_center_dim0))
     else:
-        # Fallback, pokud by těžiště ACL z nějakého důvodu selhalo
+        # Fallback if ACL centroid fails
         direction = np.sign(t_dim0 - f_dim0)
         if direction == 0: direction = 1
         slice_dim0 = int(np.round(f_dim0 + 10 * direction))
         
     slice_dim0 = np.clip(slice_dim0, 0, femur_mask.shape[0] - 1)
     
-    # 2. Extrakce sagitálního řezu uprostřed fossy
+    # 2. Extract sagittal slice at fossa center
     sag_slice = femur_mask[slice_dim0, :, :]
     
     y_c = int(f_dim1) 
@@ -128,7 +165,7 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
     
     boundary_pts = []
     
-    # 3. Ray casting "doleva" (k menším indexům Z)
+    # 3. Ray casting left (to smaller Z indices)
     y_min_ray = max(0, y_c - 20)
     y_max_ray = min(sag_slice.shape[0], y_c + 20)
     
@@ -146,10 +183,10 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
     if len(boundary_pts) < 2:
         return {} 
         
-    # ZDE CHYBĚLA DEFINICE (Extrémy pro vykreslení úsečky)
+    # Extrema for line plotting
     d2_min, d2_max = boundary_pts[:, 0].min(), boundary_pts[:, 0].max()
     
-    # 4. Lineární regrese
+    # 4. Linear regression
     slope, intercept, _, _, _ = linregress(boundary_pts[:, 0], boundary_pts[:, 1])
     
     phys_dim0 = slice_dim0 * sz
@@ -161,7 +198,7 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
     p2_blum = (phys_dim0, d1_end * sy, d2_max * sx)
     blum_line = (p1_blum, p2_blum)
     
-    # 5. Vektory a plný 2D Bounding Box přes laterální kondyl
+    # 5. Vectors and 2D bounding box over lateral condyle
     v_long = np.array([0.0, (d1_end - d1_start) * sy, (d2_max - d2_min) * sx])
     blum_length = np.linalg.norm(v_long)
     
@@ -171,7 +208,7 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
     v_long = v_long / blum_length
     v_short = np.array([0.0, -v_long[2], v_long[1]])
     
-    # Vektor musí ukazovat dolů ke kondylu
+    # Vector must point down to condyle
     if v_short[1] < 0:
         v_short = -v_short
 
@@ -192,17 +229,16 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
         proj_long = vec_y * v_long[1] + vec_z * v_long[2]
         proj_short = vec_y * v_short[1] + vec_z * v_short[2]
         
-        # TRIK: Odřízneme tělo femuru. Bereme jen voxely, které leží pod úrovní BL 
-        # (nebo max 5 fyzických milimetrů nad ní, abychom chytili přední okraj chrupavky).
+        # Keep voxels under BL level (or max 5mm above to capture anterior cartilage margin)
         condyle_voxels = proj_short > -5.0 
         
         valid_proj_long = proj_long[condyle_voxels]
         valid_proj_short = proj_short[condyle_voxels]
         
         if len(valid_proj_long) > 0:
-            min_long = np.min(valid_proj_long) # Přední/zadní hrana
-            max_long = np.max(valid_proj_long) # Přední/zadní hrana
-            max_short = np.max(valid_proj_short) # Spodní hrana
+            min_long = np.min(valid_proj_long) # Anterior/posterior edge
+            max_long = np.max(valid_proj_long) # Anterior/posterior edge
+            max_short = np.max(valid_proj_short) # Inferior edge
         else:
             min_long = 0
             max_long = blum_length
@@ -214,7 +250,7 @@ def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_cente
         
     if max_short <= 0: max_short = blum_length
     
-    # Posun počátku mřížky na nový nalezený okraj kosti (na ose v_long)
+    # Shift grid origin to detected bone edge (along v_long axis)
     grid_origin = np.array(p1_blum) + min_long * v_long
     grid_length = max_long - min_long
     grid_depth = max_short
@@ -259,14 +295,14 @@ def extract_footprints(mask_array, spacing):
     femoral_contact = acl_dilated & femur_mask
     tibial_contact = acl_dilated & tibia_mask
     
-    # Centroidy úponů ve voxelových souřadnicích
+    # Footprint centroids in voxel coordinates
     fem_z, fem_y, fem_x = ndimage.center_of_mass(femoral_contact)
     tib_z, tib_y, tib_x = ndimage.center_of_mass(tibial_contact)
     
-    # Těžiště samotného vazu (pro nalezení středu fossy)
+    # ACL centroid (to find fossa center)
     acl_z, acl_y, acl_x = ndimage.center_of_mass(acl_mask)
     
-    # Generování mřížky s dynamickým řezem uprostřed vazu
+    # Grid generation at ACL center slice
     bh_grid_info = get_bernard_hertel_grid(
         femur_mask, 
         (fem_z, fem_y, fem_x), 
@@ -279,7 +315,7 @@ def extract_footprints(mask_array, spacing):
     femur_centroid_phys = (fem_z * sz, fem_y * sy, fem_x * sx)
     tibia_centroid_phys = (tib_z * sz, tib_y * sy, tib_x * sx)
     
-    # Výpočet B&H procent
+    # Calculate B&H percentages
     bh_grid_info['bh_length_pct'] = np.nan
     bh_grid_info['bh_depth_pct'] = np.nan
     
@@ -298,15 +334,15 @@ def extract_footprints(mask_array, spacing):
         if g_len > 0:
             raw_length_pct = (proj_l / g_len) * 100.0
             
-            # Anatomický kompas: Vektor úponů ukazuje z femuru na tibii (směřuje anteriorně)
+            # Footprint vector points from femur to tibia (anteriorly)
             acl_vec = np.array(tibia_centroid_phys) - np.array(femur_centroid_phys)
             
-            # Skalární součin zjistí, zda v_long směřuje také dopředu
+            # Check if v_long also points forward
             if np.dot(v_l, acl_vec) > 0:
-                # Mřížka začíná vzadu a jde dopředu. Výpočet z počátku je správný.
+                # Grid starts posterior and goes anterior
                 bh_grid_info['bh_length_pct'] = raw_length_pct
             else:
-                # Mřížka začíná vpředu a jde dozadu. Procenta odečteme od 100.
+                # Grid starts anterior and goes posterior (invert percentage)
                 bh_grid_info['bh_length_pct'] = 100.0 - raw_length_pct
                 
         if g_dep > 0:
@@ -343,7 +379,8 @@ def analyze_acl_orientation(femur_centroid, tibia_centroid, mask_array, spacing)
     acl_vector_norm = acl_vector / np.linalg.norm(acl_vector)
     
     tibia_mask = (mask_array == 3)
-    plane_normal, centroid = get_tibial_plateau_plane(tibia_mask, spacing)
+    # Use femur centroid (p_f) as proximal reference so 'top' is defined anatomically
+    plane_normal, centroid = get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=p_f)
     
     # Calculate elevation angle relative to the plane
     angle_to_normal_rad = np.arccos(np.clip(np.abs(np.dot(acl_vector_norm, plane_normal)), -1.0, 1.0))
@@ -351,21 +388,25 @@ def analyze_acl_orientation(femur_centroid, tibia_centroid, mask_array, spacing)
     
     # Sagittal plane (Projection onto A-S plane: Axis 2=A, Axis 1=S, constant Axis 0=R=0)
     sagittal_vec = np.array([0.0, acl_vector_norm[1], acl_vector_norm[2]])
-    if np.linalg.norm(sagittal_vec) > 0:
+    sagittal_normal = np.array([0.0, plane_normal[1], plane_normal[2]])
+    if np.linalg.norm(sagittal_vec) > 0 and np.linalg.norm(sagittal_normal) > 0:
         sagittal_vec = sagittal_vec / np.linalg.norm(sagittal_vec)
-        # Angle relative to Vertical S-axis (Axis 1 = [0, -1, 0] since smaller is UP)
-        sag_angle_rad = np.arccos(np.clip(np.abs(np.dot(sagittal_vec, np.array([0.0, -1.0, 0.0]))), -1.0, 1.0))
-        sagittal_angle = np.degrees(sag_angle_rad)
+        sagittal_normal = sagittal_normal / np.linalg.norm(sagittal_normal)
+        # Sagittal angle relative to tibial plateau plane
+        sag_angle_rad = np.arccos(np.clip(np.abs(np.dot(sagittal_vec, sagittal_normal)), -1.0, 1.0))
+        sagittal_angle = 90.0 - np.degrees(sag_angle_rad)
     else:
         sagittal_angle = np.nan
         
     # Coronal plane (Projection onto R-S plane: Axis 0=R, Axis 1=S, constant Axis 2=A=0)
     coronal_vec = np.array([acl_vector_norm[0], acl_vector_norm[1], 0.0])
-    if np.linalg.norm(coronal_vec) > 0:
+    coronal_normal = np.array([plane_normal[0], plane_normal[1], 0.0])
+    if np.linalg.norm(coronal_vec) > 0 and np.linalg.norm(coronal_normal) > 0:
         coronal_vec = coronal_vec / np.linalg.norm(coronal_vec)
-        # Angle relative to Vertical S-axis
-        cor_angle_rad = np.arccos(np.clip(np.abs(np.dot(coronal_vec, np.array([0.0, -1.0, 0.0]))), -1.0, 1.0))
-        coronal_angle = np.degrees(cor_angle_rad)
+        coronal_normal = coronal_normal / np.linalg.norm(coronal_normal)
+        # Coronal angle relative to tibial plateau plane
+        cor_angle_rad = np.arccos(np.clip(np.abs(np.dot(coronal_vec, coronal_normal)), -1.0, 1.0))
+        coronal_angle = 90.0 - np.degrees(cor_angle_rad)
     else:
         coronal_angle = np.nan
         
@@ -390,30 +431,29 @@ def analyze_spatial_relations(mask_array, spacing):
     acl_mask = (mask_array == 1)
     femur_mask = (mask_array == 2)
     
-    # 1. Objem
+    # 1. Volume
     acl_volume_mm3 = np.sum(acl_mask) * voxel_vol
     
-    # 2. Impingement Assessment (Vzdálenost ACL od femuru)
+    # 2. Impingement assessment (ACL-femur distance)
     inv_femur = ~femur_mask
     dist_map = ndimage.distance_transform_edt(inv_femur, sampling=spacing)
     acl_distances = dist_map[acl_mask]
     min_dist_to_femur = acl_distances.min() if acl_distances.size > 0 else np.nan
     
-    # 3. Exaktní šířka interkondylární fossy (Ray Casting)
+    # 3. Intercondylar notch width (ray casting)
     acl_centroid = ndimage.center_of_mass(acl_mask)
     notch_width_mm = np.nan
     
     if not np.isnan(acl_centroid[0]):
-        dim0_c = int(np.round(acl_centroid[0])) # Pravo-levá osa (R-L)
-        dim1_c = int(np.round(acl_centroid[1])) # Předozadní osa (A-P) / Superior-Inferior
+        dim0_c = int(np.round(acl_centroid[0])) # R-L axis
+        dim1_c = int(np.round(acl_centroid[1])) # A-P or S-I axis
         dim2_c = int(np.round(acl_centroid[2]))
         
-        # Vyřízneme 1D paprsek napříč kolenem (R-L osa) přesně v úrovni těžiště ACL
-        # Fixujeme zbylé dvě osy, abychom stříleli rovně do stran
+        # Raycast along R-L axis at ACL centroid
         try:
             rl_ray = femur_mask[:, dim1_c, dim2_c]
             
-            # Hledáme hranice kosti směrem doleva a doprava od vazu
+            # Find bone boundaries left and right of the ligament
             left_side = rl_ray[:dim0_c]
             right_side = rl_ray[dim0_c:]
             
@@ -421,13 +461,13 @@ def analyze_spatial_relations(mask_array, spacing):
             right_hits = np.argwhere(right_side)
             
             if len(left_hits) > 0 and len(right_hits) > 0:
-                # Nejbližší stěna zleva (poslední bod před vazem)
+                # Closest left wall
                 left_edge = left_hits[-1][0]
                 
-                # Nejbližší stěna zprava (první bod za vazem)
+                # Closest right wall
                 right_edge = right_hits[0][0] + dim0_c
                 
-                # Výpočet fyzické vzdálenosti v milimetrech (dim0 odpovídá spacing[0])
+                # Compute physical distance in mm
                 notch_width_mm = (right_edge - left_edge) * spacing[0]
                 
         except IndexError:
@@ -635,15 +675,14 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
     
     points_3d = np.column_stack((np.full_like(y_phys, phys_dim0), y_phys, x_phys))
     
-    # Měření předozadního rozměru podél vektoru rovnoběžného s tibiálním platem
+    # Measure AP dimension parallel to tibial plateau
     
     plane_normal = plane_info.get("normal", np.array([0.0, -1.0, 0.0]))
     
-    # Směr osy řezu (dim0 = konstanta, tedy osa X neboli R-L [1, 0, 0])
+    # Slice axis direction (R-L)
     slice_normal = np.array([1.0, 0.0, 0.0])
     
-    # Vektorový součin zajistí, že vektor leží přesně v sagitálním řezu (X=0)
-    # a zároveň je dokonale vodorovný k tibiálnímu platu.
+    # Vector lying in sagittal slice and parallel to plateau
     v_horizontal = np.cross(plane_normal, slice_normal)
     
     if np.linalg.norm(v_horizontal) > 0:
@@ -651,7 +690,7 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
     else:
         v_horizontal = np.array([0.0, 0.0, 1.0])
         
-    # Orientace do anteriorního směru
+    # Orient to anterior direction
     acl_vec = np.array(t_centroid) - np.array(f_centroid)
     ap_global = np.array([0.0, 0.0, 1.0])
     if np.dot(ap_global, acl_vec) < 0:
@@ -660,22 +699,20 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
     if np.dot(v_horizontal, ap_global) < 0:
         v_horizontal = -v_horizontal
             
-    # Specifikace "vlastního plata" - abychom zabránili tomu, že zadní hrana bude započítána z dolní
-    # části tibiální kosti (kde se zadní kůra často svažuje a rozšiřuje hluboko pod platem), 
-    # omezíme vyhodnocované body pouze na vrchní část (maximálně 20 mm pod vrcholem kosti na řezu).
-    d_up = np.dot(points_3d, plane_normal) # plane_normal směřuje nahoru
+    # Limit evaluated points to top 20mm to avoid posterior cortex slope
+    d_up = np.dot(points_3d, plane_normal) # plane_normal points up
     max_d = np.max(d_up)
     
     plateau_slab_mask = d_up >= (max_d - 20.0)
     plateau_points = points_3d[plateau_slab_mask]
     
-    # Průmět vybraných "plateau" bodů na vodorovnou osu (místo celé masky kosti)
+    # Project plateau points to horizontal axis
     projections = np.dot(plateau_points, v_horizontal)
     
     ant_edge = np.max(projections)
     post_edge = np.min(projections)
     
-    # Těžiště v sagitální rovině
+    # Centroid in sagittal plane
     t_cent_slice = np.array([phys_dim0, t_centroid[1], t_centroid[2]])
     cent_proj = np.dot(t_cent_slice, v_horizontal)
     
@@ -688,8 +725,7 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
     staubli_pct = ((ant_edge - cent_proj) / total_ap_length) * 100.0
     staubli_pct = np.clip(staubli_pct, 0.0, 100.0)
     
-    # Výpočet koncových bodů měřící přímky pro dokonale vodorovné vykreslení
-    # Přímka nyní leží přesně na ploše tibiálního plata (průsečík plata a sagitálního řezu)
+    # Calculate line endpoints on the plateau plane intersection
     plane_center = plane_info.get("center", np.array([0.0, 0.0, 0.0]))
     v_x_plane = np.array([1.0, 0.0, 0.0]) - plane_normal[0] * plane_normal
     
@@ -767,7 +803,7 @@ def run_analysis(img_path, ref_path, mask_path):
     plane_info['att_info'] = att_debug_info
     plane_info['staubli_info'] = staubli_debug_info
     
-    # Vytáhnutí procent z mřížky
+    # Extract grid percentages
     bh_len_pct = bh_grid_info.get('bh_length_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
     bh_dep_pct = bh_grid_info.get('bh_depth_pct', np.nan) if isinstance(bh_grid_info, dict) else np.nan
 

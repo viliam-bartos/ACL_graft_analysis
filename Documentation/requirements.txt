@@ -1,10 +1,17 @@
 --extra-index-url https://download.pytorch.org/whl/cu126
+torch
+monai==1.3.0
+optuna==3.6.1
+scikit-learn==1.5.0
 numpy==1.26.4
 pandas==2.2.2
-scikit-learn==1.5.0
-optuna==3.6.1
+scipy
+scikit-image
 tqdm==4.66.4
+SimpleITK
+nibabel==5.2.1
+torchio
+pyradiomics
+pyvista
 matplotlib==3.9.0
 seaborn==0.13.2
-monai==1.3.0
-nibabel==5.2.1

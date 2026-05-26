@@ -3,6 +3,7 @@ import sys
 import glob
 import logging
 import traceback
+import re
 from pathlib import Path
 
 import numpy as np
@@ -25,11 +26,10 @@ from monai.data import decollate_batch
 # -------------------------------------------------------------------------
 CURRENT_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = CURRENT_DIR.parent
-if str(SOURCE_DIR) not in sys.path:
-    sys.path.append(str(SOURCE_DIR))
-    sys.path.append(str(SOURCE_DIR / "kanonizace"))
-    sys.path.append(str(SOURCE_DIR / "blackwell"))
-    sys.path.append(str(SOURCE_DIR / "anaknee"))
+
+for path in [SOURCE_DIR, SOURCE_DIR / "kanonizace", SOURCE_DIR / "blackwell", SOURCE_DIR / "anaknee"]:
+    if str(path) not in sys.path:
+        sys.path.append(str(path))
 
 from predict_laterality import LateralityClassifier
 from WORKSTATION_BLACKWELL_MULTICLASS_5CV import LightUNet3D
@@ -41,17 +41,17 @@ from visualizator_analyzator import visualize_results
 # -------------------------------------------------------------------------
 CONFIG = {
     # ZÁKLADNÍ MÓD A CESTY
-    "mode": "FOLDER",  # "FILE" nebo "FOLDER"
-    "input_path": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR", # Použije se pro FILE
-    "input_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\images_ASR",                      # Použije se pro FOLDER
-    "output_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_eval_5cv_bez_postprocessingu",
+    "mode": "FILE",  # "FILE" nebo "FOLDER"
+    "input_path": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Data_analyza\pripravene\zdrava_img\A05883_dx.nii.gz", # Použije se pro FILE
+    "input_dir": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Data_analyza\pripravene\zdrava_img",                      # Použije se pro FOLDER
+    "output_dir": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Data_analyza\pripravene\zdrava_nnunet",
     "log_file": "pipeline.log", # Vytvoří se uvnitř output_dir
     
     # ANAKNEE
-    "anaknee_ref_mri": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_074.nii.gz",
+    "anaknee_ref_mri": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\reference\case_074.nii.gz",
     
     # GROUND TRUTH A ANALÝZA METRIK
-    "gt_masks_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\test\labels_optuna",
+    "gt_masks_dir": r"C:\DIPLOM_PRACE\CEITEC\2509-MRI-Knee\Data\Data_analyza\pripravene\zdrava_labels",
     
     # MODEL SÍŤ (Blackwell a Kanonizace)
     "model_ckpt": r"", 
@@ -71,10 +71,10 @@ CONFIG = {
     "run_orientation": 0,
     "run_canonization": 0,
     "run_inference": 0,
-    "run_postprocessing": False,
+    "run_postprocessing": 0,
     "run_inverse_transform": 0,
-    "run_segmentation_analysis": True,
-    "run_anatomical_analysis": False,
+    "run_segmentation_analysis": 0,
+    "run_anatomical_analysis": 1,
     
     # POST-PROCESSING TŘÍDY
     # 1: ACL, 2: Femur, 3: Tibia
@@ -310,21 +310,35 @@ def perform_segmentation_analysis(output_dir, gt_dir):
     hd95_metric = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean_batch")
     post_func = AsDiscrete(to_onehot=4)
     
-    pred_files = glob.glob(os.path.join(output_dir, "mask_*.nii.gz"))
+    pred_files = glob.glob(os.path.join(output_dir, "*.nii.gz"))
     if not pred_files:
         logging.warning("Neočekávaně nenalezeny žádné výstupní masky. Segmentační analýza přeskočena.")
         return
         
     for p_path in pred_files:
         basename = os.path.basename(p_path)
-        # GT masky mají prefix 'mask_'
-        gt_path = os.path.join(gt_dir, basename)
         
-        if not os.path.exists(gt_path):
-            logging.warning(f"GT maska nenalezena pro: {basename}")
+        # Extrakce ID pomocí regulárního výrazu (hledáme souvislou řadu čísel)
+        match = re.search(r'(\d+)', basename)
+        if not match:
+            logging.warning(f"Nelze extrahovat ID z názvu predikce: {basename}")
             continue
             
-        logging.info(f"Srovnávám GT test vs. Pred pro: {basename}")
+        file_id = match.group(1)
+        
+        # Hledání odpovídající GT masky podle ID
+        gt_search_pattern = os.path.join(gt_dir, f"*{file_id}*.nii.gz")
+        gt_matches = glob.glob(gt_search_pattern)
+        
+        if not gt_matches:
+            logging.warning(f"GT maska nenalezena pro ID: {file_id} (z {basename})")
+            continue
+            
+        gt_path = gt_matches[0]
+        if len(gt_matches) > 1:
+            logging.warning(f"Nalezeno více GT masek pro ID {file_id}. Použije se: {os.path.basename(gt_path)}")
+            
+        logging.info(f"Srovnávám GT vs. Pred pro ID {file_id}: {os.path.basename(gt_path)} vs {basename}")
         
         p_sitk = sitk.ReadImage(p_path)
         g_sitk = sitk.ReadImage(gt_path)
@@ -591,7 +605,7 @@ def _load_ensemble_models(config, device):
 
 def main():
     setup_logging(CONFIG["output_dir"], CONFIG["log_file"])
-    logging.info("==== SPOUŠTÍM PIPELINE VYSOCE AUTOMATIZOVANÉHO ZPRACOVÁNÍ ====")
+    logging.info("==== SPOUŠTÍM ZPRACOVÁNÍ ====")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Používám zařízení: {device}")

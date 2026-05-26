@@ -42,13 +42,12 @@ class LateralityClassifier:
             self.model.load_state_dict(state_dict)
             print("Váhy úspěšně načteny.")
         else:
-            print("[VAROVÁNÍ] Model neexistuje! Musíš ho nejdříve natrénovat.")
+            print("[VAROVÁNÍ] Model neexistuje")
             
         self.model.to(self.device)
         self.model.eval()
         
         # MONAI transformace pro inference. 
-        # (Používáme nediagnostické verze transformací pracujících nad numpy array / path bez slovníku)
         self.transforms = Compose([
             LoadImage(image_only=True),
             EnsureChannelFirst(),

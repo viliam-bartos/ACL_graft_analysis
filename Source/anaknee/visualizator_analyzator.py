@@ -101,8 +101,7 @@ def visualize_results(mask_data, spacing, vis_data):
                              i_size=60, j_size=60, 
                              i_resolution=1, j_resolution=1)
     
-    # In older PyVista versions, pv.Plane doesn't reliably accept i_direction/j_direction in kwargs.
-    # The safest way to orient the plane is to generate it at origin with Z normal, then transform it.
+   
     base_plane = pv.Plane(center=(0,0,0), direction=(0,0,1), i_size=60, j_size=60, i_resolution=1, j_resolution=1)
     # Transformation matrix: Columns are i_dir, j_dir, normal, and the last column is the translation.
     trans_matrix = np.eye(4)
@@ -152,7 +151,7 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_blum_pt1 = pv.PolyData()
         actor_blum_pt2 = pv.PolyData()
 
-    # G. ATT Lines (Kolmice)
+    # G. ATT Lines (Perpendicular)
     att_info = vis_data.get('att_info', {})
     if att_info and 'tibia_pt' in att_info:
         t_pt = att_info['tibia_pt']
@@ -160,7 +159,7 @@ def visualize_results(mask_data, spacing, vis_data):
         v_ant = att_info['v_anterior']
         n_p = att_info['plane_normal']
         
-        # Osa kolmice k platu (nahoru/dolu podel normaly)
+        # Perpendicular line to plateau plane
         t_line_start = t_pt - 40 * n_p
         t_line_end = t_pt + 40 * n_p
         f_line_start = f_pt - 40 * n_p
@@ -171,7 +170,7 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_att_t_pt = pv.Sphere(radius=2.5, center=t_pt)
         actor_att_f_pt = pv.Sphere(radius=2.5, center=f_pt)
         
-        # Linie měření (vzdálenost mezi stěnami) v predozadní projektované ose v_ant
+        # Measurement line along projected A-P axis
         dist = np.dot((t_pt - f_pt), v_ant)
         measure_end = f_pt + dist * v_ant
         actor_att_measure = pv.Line(f_pt, measure_end)

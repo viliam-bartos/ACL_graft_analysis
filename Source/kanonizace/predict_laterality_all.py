@@ -48,7 +48,7 @@ class LateralityClassifier:
             self.model.load_state_dict(state_dict)
             print("Váhy úspěšně načteny.")
         else:
-            raise FileNotFoundError(f"[CHYBA] Model nebyl nalezen na cestě: {model_path}. Musíš ho nejprve natrénovat!")
+            raise FileNotFoundError(f"[CHYBA] Model nebyl nalezen na cestě: {model_path}.")
             
         self.model.to(self.device)
         self.model.eval()

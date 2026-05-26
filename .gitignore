@@ -57,10 +57,10 @@ venv/
 .idea/
 results_3D/
 vysledky_modelu/
-*.nii.gz
 *.csv
-*.pth
 *.png
 *.pdf
 *.json
 *.dcm
+*.nii
+Data/Data_analyza/

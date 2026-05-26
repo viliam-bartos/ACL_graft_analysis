@@ -7,10 +7,10 @@ def run_pipeline(mri_path, mask_path):
     
     ref_path = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_074.nii.gz"
     
-    # 1. Spustí matematiku a radiomiku (vrací slovník geometrických/radiomických parametrů, masku, velikost voxelů a parametry rovin)
+    # 1. Run analysis and radiomics
     results_dict, mask_array, spacing, f_centroid, t_centroid, plane_info = run_analysis(mri_path, ref_path, mask_path)
     
-    # 2. Uloží výsledky do tabulky (header se zapíše pouze u první položky)
+    # 2. Save results to CSV (write header only for the first row)
     df = pd.DataFrame([results_dict])
     header = not os.path.exists("acl_results.csv")
     df.to_csv("acl_results.csv", mode='a', header=header, index=False)
