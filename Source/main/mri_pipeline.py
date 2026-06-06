@@ -188,11 +188,11 @@ def _preprocess_image(img_path):
     # Transpozice z (Z, Y, X) do (X, Y, Z) pro model
     img_array = np.transpose(img_array, (2, 1, 0))
     
-    # Skálování intenzit (MONAI ScaleIntensityRangePercentilesd logika)
+    # Skálování intenzit (MONAI ScaleIntensityRangePercentilesd logika s ořezáním, bez redundantního dělení)
     p05 = np.percentile(img_array, 0.5)
     p995 = np.percentile(img_array, 99.5)
     img_array = np.clip(img_array, p05, p995)
-    img_array = (img_array - p05) / (p995 - p05 + 1e-8)
+    img_array = img_array - p05
     
     # Standardize (NormalizeIntensityd channel wise na non-zero)
     non_zero = img_array > 0

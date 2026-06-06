@@ -119,7 +119,6 @@ def get_transforms(mode, patch_size):
         LoadImaged(keys=["image", "label"]),
         EnsureChannelFirstd(keys=["image", "label"]),
         ScaleIntensityRangePercentilesd(keys=["image"], lower=0.5, upper=99.5, b_min=0.0, b_max=1.0, clip=True),
-        NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
         SpatialPadd(keys=["image", "label"], spatial_size=patch_size),
     ]
 
@@ -132,8 +131,8 @@ def get_transforms(mode, patch_size):
             RandBiasFieldd(keys=["image"], prob=0.2, degree=3, coeff_range=(0.3, 0.5)),
             Rand3DElasticd(keys=["image", "label"], sigma_range=(5, 8), magnitude_range=(80, 100), prob=0.1, mode=("bilinear", "nearest"), padding_mode="zeros"),
         ]
-        return Compose(base_transforms + augmentations)
-    return Compose(base_transforms)
+        return Compose(base_transforms + augmentations + [NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True)])
+    return Compose(base_transforms + [NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True)])
 
 
 # ----------------------------------------------------
