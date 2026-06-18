@@ -1,4 +1,4 @@
-# Project Name: Automated ACL Segmentation and 3D Geometric Analysis
+# Automated ACL Segmentation and 3D Geometric Analysis
 
 ## Project Description
 
