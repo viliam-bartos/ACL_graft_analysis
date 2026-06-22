@@ -1,5 +1,6 @@
 import numpy as np
 import pyvista as pv
+pv.global_theme.allow_empty_mesh = True
 import nibabel as nib
 from scipy.ndimage import binary_dilation
 
@@ -109,7 +110,7 @@ def visualize_results(mask_data, spacing, vis_data):
     trans_matrix[0:3, 1] = j_dir
     trans_matrix[0:3, 2] = dummy_plateau_normal
     trans_matrix[0:3, 3] = dummy_plateau_center
-    plateau_plane = base_plane.transform(trans_matrix)
+    plateau_plane = base_plane.transform(trans_matrix, inplace=False)
     # D. Bernard & Hertel Grid
     bh_lines = []
     bh_grid_info = vis_data.get('bh_grid_info', {})

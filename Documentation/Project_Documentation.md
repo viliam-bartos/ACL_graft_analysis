@@ -168,7 +168,19 @@ Trains a standard 3D ResNet-18 network using binary cross-entropy loss to classi
 ## 7. Dependencies and Hardware Configuration
 
 ### Dependencies Setup
-The pipeline relies on several specialized libraries. The environment can be initialized using the packages defined in [requirements.txt](file:///c:/DIPLOM_PRACE/CEITEC/2509-MRI-Knee/Documentation/requirements.txt):
+The pipeline relies on several specialized libraries. 
+
+> [!IMPORTANT]
+> **Windows Build Prerequisite:** On Windows with Python 3.10+, the `pyradiomics` library does not have precompiled binary wheels on PyPI and must be compiled from source. This requires **Visual Studio Build Tools** (C++ build tools) to be installed on your machine with the **"Desktop development with C++"** workload selected.
+>
+> **Installation order:**
+> 1. Install Visual Studio Build Tools.
+> 2. Initialize your virtual environment.
+> 3. Install build prerequisites: `pip install numpy versioneer`
+> 4. Install `pyradiomics` without build isolation: `pip install pyradiomics --no-build-isolation`
+> 5. Install the remaining dependencies: `pip install -r Documentation/requirements.txt`
+
+The environment can be initialized using the packages defined in [requirements.txt](file:///c:/DIPLOM_PRACE/CEITEC/2509-MRI-Knee/Documentation/requirements.txt):
 ```bash
 pip install -r Documentation/requirements.txt
 ```

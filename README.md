@@ -29,8 +29,16 @@ The codebase is organized into modular sections:
 ## Installation and Setup
 
 1.  Clone this repository to your local machine.
-2.  Install dependencies:
+2.  **Windows Build Prerequisite:** On Windows with Python 3.10+, installing the `pyradiomics` package requires **Visual Studio Build Tools** (specifically the **"Desktop development with C++"** workload). Make sure this is installed on your system before proceeding.
+3.  Install dependencies:
     ```bash
+    # 1. Install build tools prerequisites
+    pip install numpy versioneer
+    
+    # 2. Install pyradiomics with build isolation disabled
+    pip install pyradiomics --no-build-isolation
+    
+    # 3. Install remaining requirements
     pip install -r Documentation/requirements.txt
     ```
 

@@ -11,10 +11,118 @@ from skimage.measure import ransac, LineModelND
 import radiomics
 from radiomics import featureextractor
 import warnings
+import nibabel as nib
+import nibabel.orientations as nio
 
 # Suppress warnings that might clutter the medical image analysis output
 warnings.filterwarnings("ignore")
 logging.getLogger("radiomics").setLevel(logging.ERROR)
+
+
+# =============================================================================
+# Canonical Orientation Helper
+# =============================================================================
+def _reorient_to_lia(sitk_img):
+    """
+    Reorient a SimpleITK image to LIA orientation using nibabel.
+    
+    LIA means numpy array dimensions increase as:
+        dim 0: R -> L (Left)       = R-L axis
+        dim 1: S -> I (Inferior)   = S-I axis
+        dim 2: P -> A (Anterior)   = A-P axis
+    
+    This matches the hardcoded axis assumptions in the analysis code:
+        - Sagittal slice = femur_mask[dim0, :, :]  (dim0 = R-L)
+        - ap_global = [0, 0, 1]                    (dim2 = A-P)
+        - v_short[1] > 0 = downward                (dim1 = S-I)
+    
+    Args:
+        sitk_img: SimpleITK.Image to reorient
+        
+    Returns:
+        SimpleITK.Image in LIA orientation
+    """
+    # Convert SimpleITK -> nibabel for orientation detection
+    arr = sitk.GetArrayFromImage(sitk_img)
+    spacing_xyz = sitk_img.GetSpacing()       # (sx, sy, sz)
+    origin_xyz = sitk_img.GetOrigin()          # (ox, oy, oz)
+    direction = sitk_img.GetDirection()        # 9-element flat tuple
+    
+    # Build nibabel affine from SimpleITK metadata
+    # SimpleITK direction is row-major 3x3 rotation, spacing is (x,y,z)
+    dir_mat = np.array(direction).reshape(3, 3)
+    affine = np.eye(4)
+    for i in range(3):
+        for j in range(3):
+            affine[i, j] = dir_mat[i, j] * spacing_xyz[j]
+    affine[:3, 3] = origin_xyz
+    
+    # nibabel expects (i,j,k) -> (x,y,z), but sitk.GetArrayFromImage
+    # returns (k,j,i) numpy order. Reorder affine columns accordingly.
+    affine_nib = np.eye(4)
+    affine_nib[:3, 0] = affine[:3, 2]  # numpy dim0 = sitk k -> physical
+    affine_nib[:3, 1] = affine[:3, 1]  # numpy dim1 = sitk j -> physical
+    affine_nib[:3, 2] = affine[:3, 0]  # numpy dim2 = sitk i -> physical
+    affine_nib[:3, 3] = affine[:3, 3]  # origin
+    
+    nib_img = nib.Nifti1Image(arr, affine_nib)
+    
+    # Check current orientation and compute transform to LIA
+    current_ornt = nio.io_orientation(nib_img.affine)
+    target_ornt = nio.axcodes2ornt("LIA")
+    transform = nio.ornt_transform(current_ornt, target_ornt)
+    
+    identity = np.array([[0, 1], [1, 1], [2, 1]])
+    if np.array_equal(transform, identity):
+        logging.info("  -> Anaknee: Data is already in LIA orientation.")
+        return sitk_img
+    
+    current_codes = nio.ornt2axcodes(current_ornt)
+    logging.info(f"  -> Anaknee: Reorienting from {''.join(current_codes)} to LIA.")
+    
+    reoriented_nib = nib_img.as_reoriented(transform)
+    reoriented_arr = np.ascontiguousarray(reoriented_nib.get_fdata())
+    
+    # Reconstruct SimpleITK image from reoriented nibabel
+    new_affine = reoriented_nib.affine
+    
+    # Extract spacing from affine (column norms)
+    new_spacing_zyx = (
+        np.linalg.norm(new_affine[:3, 0]),  # dim0 spacing
+        np.linalg.norm(new_affine[:3, 1]),  # dim1 spacing
+        np.linalg.norm(new_affine[:3, 2]),  # dim2 spacing
+    )
+    # SimpleITK spacing is (x, y, z) = reversed numpy (dim2, dim1, dim0)
+    new_spacing_sitk = (new_spacing_zyx[2], new_spacing_zyx[1], new_spacing_zyx[0])
+    
+    # Direction: normalize affine columns, then reverse to sitk (x,y,z) order
+    dir_cols = []
+    for c in [2, 1, 0]:  # sitk x=dim2, y=dim1, z=dim0
+        col = new_affine[:3, c]
+        norm = np.linalg.norm(col)
+        if norm > 0:
+            col = col / norm
+        dir_cols.append(col)
+    new_direction = tuple(np.array(dir_cols).T.flatten())
+    
+    # Origin
+    new_origin = tuple(new_affine[:3, 3])
+    
+    # Preserve pixel type when reconstructing SimpleITK image
+    if sitk_img.GetPixelID() == sitk.sitkUInt8:
+        new_sitk = sitk.GetImageFromArray(reoriented_arr.astype(np.uint8))
+    elif sitk_img.GetPixelID() == sitk.sitkInt16:
+        new_sitk = sitk.GetImageFromArray(reoriented_arr.astype(np.int16))
+    elif sitk_img.GetPixelID() == sitk.sitkFloat32:
+        new_sitk = sitk.GetImageFromArray(reoriented_arr.astype(np.float32))
+    else:
+        new_sitk = sitk.GetImageFromArray(reoriented_arr.astype(np.float64))
+    
+    new_sitk.SetSpacing(new_spacing_sitk)
+    new_sitk.SetOrigin(new_origin)
+    new_sitk.SetDirection(new_direction)
+    
+    return new_sitk
 
 # =============================================================================
 # Module 1: Histogram Matching (Intensity Standardization)
@@ -73,13 +181,13 @@ def match_histograms(img_sitk, ref_path, mask_sitk=None):
 
 def get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=None, top_fraction=0.25):
     """
-    Robust estimation of the tibial plateau plane.
+    Robust estimation of the tibial plateau plane using iterative refinement.
 
-    - Computes the tibia long axis by PCA in physical coordinates.
-    - Selects the top fraction of voxels along that long axis (towards the proximal_point
-      if provided) to represent the plateau surface.
-    - Fits a plane to those top points (SVD) and returns its normal and centroid.
-
+    - Avoids PCA on the whole tibia, which fails when the mask is wider than it is long.
+    - Starts with an initial vertical guess (or the vector to the proximal point).
+    - Iteratively selects the top fraction of voxels along the current axis and fits a plane
+      to those points to refine the axis.
+      
     Args:
         tibia_mask (np.ndarray): boolean mask of tibia voxels (in voxel coords)
         spacing (tuple): voxel spacing (sz, sy, sx) in mm
@@ -90,54 +198,64 @@ def get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=None, top_fract
         normal (np.ndarray): unit normal vector of the fitted plateau plane (physical coords)
         centroid (np.ndarray): physical centroid of the selected plateau points
     """
-    sR, sS, sA = spacing
+    s0, s1, s2 = spacing
     coords = np.argwhere(tibia_mask)
     if len(coords) == 0:
-        return np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 0.0])
+        return np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 0.0])
 
-    phys_coords = coords * np.array([sR, sS, sA])
-
-    # PCA to determine tibia long axis (largest variance direction)
+    phys_coords = coords * np.array([s0, s1, s2])
     mean_all = phys_coords.mean(axis=0)
-    centered_all = phys_coords - mean_all
-    try:
-        _, _, vh_all = np.linalg.svd(centered_all, full_matrices=False)
-        long_axis = vh_all[0, :]
-    except Exception:
-        # Fallback to anatomical S-axis if PCA fails
-        long_axis = np.array([0.0, 1.0, 0.0])
 
-    # If a proximal_point (e.g. femur centroid) is provided, orient long_axis towards it
+    # 1. Initialize the upward axis
+    # In LIA orientation, dim1 is S-I (positive is down/inferior, so up/superior is negative)
     if proximal_point is not None:
-        vec_to_prox = np.array(proximal_point) - mean_all
-        if np.dot(long_axis, vec_to_prox) < 0:
-            long_axis = -long_axis
+        current_axis = np.array(proximal_point) - mean_all
+    else:
+        current_axis = np.array([0.0, -1.0, 0.0])
+        
+    nrm = np.linalg.norm(current_axis)
+    if nrm > 0:
+        current_axis = current_axis / nrm
+    else:
+        current_axis = np.array([0.0, -1.0, 0.0])
 
-    # Project all tibia points onto the long axis and take the top_fraction of them
-    projections = phys_coords.dot(long_axis)
-    n_top = max(3, int(len(projections) * float(top_fraction)))
-    # take the voxels with largest projection (proximal end)
-    top_idx = np.argsort(projections)[-n_top:]
-    top_points = phys_coords[top_idx]
-
-    if len(top_points) >= 3:
+    # 2. Iterative refinement (3 iterations is enough to converge)
+    n_top = max(3, int(len(phys_coords) * float(top_fraction)))
+    centroid = mean_all
+    
+    for _ in range(3):
+        # Project all tibia points onto the current upward axis
+        projections = phys_coords.dot(current_axis)
+        
+        # Take the voxels with largest projection (the proximal end / plateau)
+        top_idx = np.argsort(projections)[-n_top:]
+        top_points = phys_coords[top_idx]
+        
         centroid = top_points.mean(axis=0)
         centered = top_points - centroid
-        _, _, vh = np.linalg.svd(centered, full_matrices=False)
-        normal = vh[-1, :]
-    else:
-        centroid = phys_coords.mean(axis=0)
-        normal = np.array([0.0, -1.0, 0.0])
+        
+        # Fit plane to top points
+        try:
+            _, _, vh = np.linalg.svd(centered, full_matrices=False)
+            new_normal = vh[-1, :]
+        except Exception:
+            new_normal = current_axis
+            
+        # Ensure the new normal points in the same general upward direction
+        if np.dot(new_normal, current_axis) < 0:
+            new_normal = -new_normal
+            
+        # Update axis for next iteration
+        nrm = np.linalg.norm(new_normal)
+        if nrm > 0:
+            current_axis = new_normal / nrm
 
-    # Orient normal to point towards proximal_point (femur) if available
+    normal = current_axis
+
+    # Orient normal strictly towards proximal_point (femur) if available
     if proximal_point is not None:
         if np.dot(normal, np.array(proximal_point) - centroid) < 0:
             normal = -normal
-
-    # Ensure normalized
-    nrm = np.linalg.norm(normal)
-    if nrm > 0:
-        normal = normal / nrm
 
     return normal, centroid
 
@@ -755,13 +873,21 @@ def calculate_staubli_tibial(tibia_mask, t_centroid, f_centroid, spacing, plane_
 def run_analysis(img_path, ref_path, mask_path):
     """
     Executes the analytical pipeline and returns structures needed for reporting and visualization.
+    
+    Both the image and mask are reoriented to LIA canonical orientation at the start,
+    ensuring all downstream axis assumptions (dim0=R-L, dim1=S-I, dim2=A-P) are correct
+    regardless of the input file's original orientation.
     """
     logging.info(f"Loading MRI sequence: {img_path}")
     logging.info(f"Loading Reference MRI: {ref_path}")
     logging.info(f"Loading Segmentation Mask: {mask_path}")
     
-    img_sitk = sitk.ReadImage(img_path)
-    mask_sitk = sitk.ReadImage(mask_path)
+    img_sitk_raw = sitk.ReadImage(img_path)
+    mask_sitk_raw = sitk.ReadImage(mask_path)
+    
+    # Canonical reorientation to LIA (dim0=R-L, dim1=S-I, dim2=A-P)
+    img_sitk = _reorient_to_lia(img_sitk_raw)
+    mask_sitk = _reorient_to_lia(mask_sitk_raw)
         
     spacing = img_sitk.GetSpacing()
     sz, sy, sx = spacing[2], spacing[1], spacing[0]
@@ -836,11 +962,15 @@ def main():
     logging.info(f"Loading Segmentation Mask: {args.mask}")
     
     try:
-        img_sitk = sitk.ReadImage(args.img)
-        mask_sitk = sitk.ReadImage(args.mask)
+        img_sitk_raw = sitk.ReadImage(args.img)
+        mask_sitk_raw = sitk.ReadImage(args.mask)
     except Exception as e:
         logging.error(f"Failed to load NIfTI images: {e}")
         return
+    
+    # Canonical reorientation to LIA
+    img_sitk = _reorient_to_lia(img_sitk_raw)
+    mask_sitk = _reorient_to_lia(mask_sitk_raw)
         
     spacing = img_sitk.GetSpacing()
     # Note: SimpleITK spacing is (x, y, z), but numpy shape is (z, y, x).
