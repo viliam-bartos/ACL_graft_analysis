@@ -22,12 +22,12 @@ logging.getLogger("radiomics").setLevel(logging.ERROR)
 # =============================================================================
 # Canonical Orientation Helper
 # =============================================================================
-def _reorient_to_lia(sitk_img):
+def _reorient_to_ria(sitk_img):
     """
-    Reorient a SimpleITK image to LIA orientation using nibabel.
+    Reorient a SimpleITK image to RIA orientation using nibabel.
     
-    LIA means numpy array dimensions increase as:
-        dim 0: R -> L (Left)       = R-L axis
+    RIA means numpy array dimensions increase as:
+        dim 0: L -> R (Right)      = R-L axis
         dim 1: S -> I (Inferior)   = S-I axis
         dim 2: P -> A (Anterior)   = A-P axis
     
@@ -40,7 +40,7 @@ def _reorient_to_lia(sitk_img):
         sitk_img: SimpleITK.Image to reorient
         
     Returns:
-        SimpleITK.Image in LIA orientation
+        SimpleITK.Image in RIA orientation
     """
     # Convert SimpleITK -> nibabel for orientation detection
     arr = sitk.GetArrayFromImage(sitk_img)
@@ -67,18 +67,18 @@ def _reorient_to_lia(sitk_img):
     
     nib_img = nib.Nifti1Image(arr, affine_nib)
     
-    # Check current orientation and compute transform to LIA
+    # Check current orientation and compute transform to RIA
     current_ornt = nio.io_orientation(nib_img.affine)
-    target_ornt = nio.axcodes2ornt("LIA")
+    target_ornt = nio.axcodes2ornt("RIA")
     transform = nio.ornt_transform(current_ornt, target_ornt)
     
     identity = np.array([[0, 1], [1, 1], [2, 1]])
     if np.array_equal(transform, identity):
-        logging.info("  -> Anaknee: Data is already in LIA orientation.")
+        logging.info("  -> Anaknee: Data is already in RIA orientation.")
         return sitk_img
     
     current_codes = nio.ornt2axcodes(current_ornt)
-    logging.info(f"  -> Anaknee: Reorienting from {''.join(current_codes)} to LIA.")
+    logging.info(f"  -> Anaknee: Reorienting from {''.join(current_codes)} to RIA.")
     
     reoriented_nib = nib_img.as_reoriented(transform)
     reoriented_arr = np.ascontiguousarray(reoriented_nib.get_fdata())
@@ -874,7 +874,7 @@ def run_analysis(img_path, ref_path, mask_path):
     """
     Executes the analytical pipeline and returns structures needed for reporting and visualization.
     
-    Both the image and mask are reoriented to LIA canonical orientation at the start,
+    Both the image and mask are reoriented to RIA canonical orientation at the start,
     ensuring all downstream axis assumptions (dim0=R-L, dim1=S-I, dim2=A-P) are correct
     regardless of the input file's original orientation.
     """
@@ -885,9 +885,9 @@ def run_analysis(img_path, ref_path, mask_path):
     img_sitk_raw = sitk.ReadImage(img_path)
     mask_sitk_raw = sitk.ReadImage(mask_path)
     
-    # Canonical reorientation to LIA (dim0=R-L, dim1=S-I, dim2=A-P)
-    img_sitk = _reorient_to_lia(img_sitk_raw)
-    mask_sitk = _reorient_to_lia(mask_sitk_raw)
+    # Canonical reorientation to RIA (dim0=R-L, dim1=S-I, dim2=A-P)
+    img_sitk = _reorient_to_ria(img_sitk_raw)
+    mask_sitk = _reorient_to_ria(mask_sitk_raw)
         
     spacing = img_sitk.GetSpacing()
     sz, sy, sx = spacing[2], spacing[1], spacing[0]
@@ -968,9 +968,9 @@ def main():
         logging.error(f"Failed to load NIfTI images: {e}")
         return
     
-    # Canonical reorientation to LIA
-    img_sitk = _reorient_to_lia(img_sitk_raw)
-    mask_sitk = _reorient_to_lia(mask_sitk_raw)
+    # Canonical reorientation to RIA
+    img_sitk = _reorient_to_ria(img_sitk_raw)
+    mask_sitk = _reorient_to_ria(mask_sitk_raw)
         
     spacing = img_sitk.GetSpacing()
     # Note: SimpleITK spacing is (x, y, z), but numpy shape is (z, y, x).

@@ -119,7 +119,7 @@ CONFIG = {
     "ensemble_dir": r"C:\ACL_analysis\ACL_graft_analysis\Data\5CV",
     "ensemble_pattern": "best_model_fold_*.pth",  # glob vzor pro vyhledávání vah foldů
     # PŘEPÍNAČE MODULŮ
-    "run_inference": 0,
+    "run_inference": 1,
     "run_segmentation_analysis": 0,
     "run_anatomical_analysis": 1,
     # POST-PROCESSING TŘÍDY
