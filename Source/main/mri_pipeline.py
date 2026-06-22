@@ -19,11 +19,10 @@ import torch
 from monai.inferers import sliding_window_inference
 from monai.metrics import (
     DiceMetric,
-    HausdorffDistanceMetric,
     compute_hausdorff_distance,
 )
 from monai.transforms import AsDiscrete
-from monai.data import decollate_batch
+
 
 # -------------------------------------------------------------------------
 # OŠETŘENÍ IMPORTŮ MEZI SLOŽKAMI (přidání do sys.path)
@@ -363,9 +362,6 @@ def perform_segmentation_analysis(output_dir, gt_dir):
 
     results = []
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
-    hd95_metric = HausdorffDistanceMetric(
-        include_background=False, percentile=95, reduction="mean_batch"
-    )
     post_func = AsDiscrete(to_onehot=4)
 
     pred_files = glob.glob(os.path.join(output_dir, "*.nii.gz"))
@@ -439,7 +435,7 @@ def perform_segmentation_analysis(output_dir, gt_dir):
                 )
                 try:
                     h_val = hd95[class_idx].item()
-                except:
+                except Exception:
                     h_val = float("nan")
 
                 results.append(
@@ -641,6 +637,12 @@ def process_single_volume(
             logging.warning(
                 f"  -> Nepodařilo se smazat dočasný soubor {temp_nifti_path}: {e}"
             )
+            
+    # Návratová hodnota pro volající GUI
+    if "res_dict" in locals():
+        res_dict["Filename"] = os.path.basename(file_path)
+        return res_dict
+    return None
 
 
 def _load_ensemble_models(config, device):
@@ -678,6 +680,32 @@ def _load_ensemble_models(config, device):
 
     return loaded_models
 
+
+def run_visualization_only(img_path, ref_path, mask_path):
+    """
+    Rychle spustí anatomickou analýzu pro získání centroidů a normály a následně zavolá PyVistu.
+    Nevytváří záznamy do CSV.
+    """
+    from anaknee.main_acl_analysis import run_analysis
+    from anaknee.visualizator_analyzator import visualize_results
+    try:
+        logging.info(f"Příprava 3D vizualizace pro: {os.path.basename(img_path)}")
+        res_dict, mask_array_ana, spacing_zyx, f_cent, t_cent, p_info = run_analysis(
+            img_path, ref_path, mask_path
+        )
+        vis_data = {
+            "femoral_centroid": f_cent,
+            "tibial_centroid": t_cent,
+            "plateau_normal": p_info["normal"],
+            "plateau_center": p_info["center"],
+            "bh_grid_info": p_info.get("bh_grid_info", {}),
+            "att_info": p_info.get("att_info", {}),
+            "staubli_info": p_info.get("staubli_info", {}),
+        }
+        visualize_results(mask_array_ana, spacing_zyx, vis_data)
+    except Exception as e:
+        logging.error(f"Nelze spustit 3D vizualizaci: {e}")
+        traceback.print_exc()
 
 def main():
     setup_logging(CONFIG["output_dir"], CONFIG["log_file"])
