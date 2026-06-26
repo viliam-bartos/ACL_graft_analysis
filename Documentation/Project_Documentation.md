@@ -1,10 +1,10 @@
-# Technical Project Documentation
+# Project Documentation
 
 This document provides a basic developer overview of the Automated ACL Segmentation and 3D Geometric Analysis application.
 
 ## 1. System Architecture
 
-*   **`Source/main/gui_app.py`**: The graphical interface. It handles user inputs and runs the processing pipeline on a background thread.
+*   **`Source/main/gui_app.py`**: Graphical interface. It handles user inputs and runs the processing pipeline on a background thread.
 *   **`Source/main/mri_pipeline.py`**: The core processing script.
 *   **`Source/anaknee/`**: Contains `main_acl_analysis.py` for geometric calculations and `visualizator_analyzator.py` for the PyVista 3D viewer.
 *   **`Source/blackwell/`**: Deep learning models (3D U-Net) and Hyperparameter Optimization scripts.
