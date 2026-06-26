@@ -1,54 +1,42 @@
 # Automated ACL Segmentation and 3D Geometric Analysis
 
-This project, titled **2509-MRI-Knee**, is developed by **Viliam Bartoš** under the supervision of **Ing. Jakub Lázňovský, Ph.D.** as part of a Master's Thesis at CEITEC.
-
-It provides an automated medical imaging pipeline for the segmentation of the Anterior Cruciate Ligament (ACL), Femur, and Tibia from 3D isotropic MRI scans. The repository also includes scripts for automated 3D geometric measurement and analysis of the knee joint.
+A medical imaging application for the automated segmentation of the Anterior Cruciate Ligament (ACL), Femur, and Tibia from isotropic 3D MRI scans. This project is developed by Viliam Bartoš under the supervision of Ing. Jakub Lázňovský, Ph.D. as part of a Master Thesis. 
 
 ---
 
-## Documentation
+## Features
 
-For technical references, execution steps, and code explanations, please see the primary documentation files:
-
-*   **[Technical Project Documentation](file:///c:/DIPLOM_PRACE/CEITEC/2509-MRI-Knee/Documentation/Project_Documentation.md)** - Explains the architecture of the pipeline, code structure, models, training, HPO, and metrics calculations.
----
-
-## Repository Modules
-
-The codebase is organized into modular sections:
-
-*   **`Source/main/mri_pipeline.py`**: The end-to-end processing pipeline, coordinating volume resampling, PIL reorientation, laterality classification, U-Net inference, post-processing, and anatomical calculations.
-*   **`Source/anaknee/`**:
-    *   `main_acl_analysis.py`: Features footprint centroid detection, tibial plateau SVD/PCA plane fitting, ACL orientation angles, radiomics features, tortuosity index, ATT (Anterior Tibial Translation), and Stäubli AP percentage.
-    *   `visualizator_analyzator.py`: Interactive 3D visualization of the segmentations and geometric elements using PyVista.
-*   **`Source/blackwell/`**: 3D U-Net multiclass model definitions, 5-fold cross-validation training, and Optuna HPO tuning.
-*   **`Source/kanonizace/`**: 3D ResNet-18 laterality classifier to predict if the input MRI is a left or right knee.
+* **GUI**: Desktop application for configuring the pipeline.
+* **Format Support**: Should process both `.nii/.nii.gz` NIfTI volumes and raw `.dcm` DICOM directories.
+* **Automated Pipeline**: Processing pipeline including resampling, orientation, Deep Learning inference (3D U-Net), and post-processing.
+* **Geometric Analysis**: Computes clinical markers such as Anterior Tibial Translation (ATT), Stäubli percentage, ACL tortuosity, and notch width.
+* **3D Visualization**: PyVista-based visualization of bones, ACL, and measurement axes.
+* **Laterality Detection**: Automatically detects Left/Right knees from filenames or prompts the user via a GUI popup.
 
 ---
 
-## Installation and Setup
+## Installation
 
-1.  Clone this repository to your local machine.
-2.  **Windows Build Prerequisite:** On Windows with Python 3.10+, installing the `pyradiomics` package requires **Visual Studio Build Tools** (specifically the **"Desktop development with C++"** workload). Make sure this is installed on your system before proceeding.
-3.  Install dependencies:
-    ```bash
-    # 1. Install build tools prerequisites
-    pip install numpy versioneer
-    
-    # 2. Install pyradiomics with build isolation disabled
-    pip install pyradiomics --no-build-isolation
-    
-    # 3. Install remaining requirements
-    pip install -r Documentation/requirements.txt
-    ```
+1. Clone this repository to your local machine.
+2. **Windows Prerequisite:** Python 3.10+ requires **Visual Studio Build Tools** (Desktop development with C++) to compile `pyradiomics`.
+3. Install dependencies:
+   ```bash
+   pip install numpy==1.26.4 versioneer
+   pip install pyradiomics --no-build-isolation
+   pip install -r Documentation/requirements.txt
+   ```
 
 ---
 
-## How to Run
+## Quickstart
 
-1.  Open [mri_pipeline.py](file:///c:/DIPLOM_PRACE/CEITEC/2509-MRI-Knee/Source/main/mri_pipeline.py) and modify the parameters in the `CONFIG` dictionary at the top (e.g., input paths, model checkpoints, switches for resampling, inference, and anatomical analysis).
-2.  Execute the pipeline:
-    ```bash
-    python Source/main/mri_pipeline.py
-    ```
-3.  Check output segmentations, CSV reports, and visualization windows as configured.
+Run the GUI application:
+```bash
+python Source/main/gui_app.py
+```
+
+1. **Processing Tab:** Select a Single File or Patient Folder. Choose the output directory and select which modules to run. Click **Run Analysis**.
+2. **Dashboard Tab:** Load the resulting `patient_results.csv` to view metric trend graphs and launch the interactive 3D viewer for individual scans.
+3. **Settings Tab:** Configure paths to reference MRIs, model checkpoints, and ground truth directories.
+
+For more technical details on the architecture, models, and metric definitions, see [Project_Documentation.md](Documentation/Project_Documentation.md).
