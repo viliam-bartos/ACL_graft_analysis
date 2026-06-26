@@ -39,4 +39,4 @@ python Source/main/gui_app.py
 2. **Dashboard Tab:** Load the resulting `patient_results.csv` to view metric trend graphs and launch the interactive 3D viewer for individual scans.
 3. **Settings Tab:** Configure paths to reference MRIs, model checkpoints, and ground truth directories.
 
-For more technical details on the architecture, models, and metric definitions, see [Project_Documentation.md](Documentation/Project_Documentation.md).
+Also see [Project_Documentation.md](Documentation/Project_Documentation.md).
