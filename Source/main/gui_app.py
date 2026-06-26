@@ -8,7 +8,6 @@ import logging
 import subprocess
 from pathlib import Path
 
-# Ensure we import mri_pipeline from the current folder
 CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.append(str(CURRENT_DIR))
@@ -33,7 +32,7 @@ import customtkinter as ctk  # noqa: E402
 
 
 class TextboxHandler(logging.Handler):
-    """Routes log messages to the GUI textbox."""
+    """Logging handler that appends to a CTk textbox."""
 
     def __init__(self, textbox):
         super().__init__()
@@ -42,7 +41,6 @@ class TextboxHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
 
-        # Filter out overly detailed logs for the GUI
         if "Resampling" in msg or "Reorienting" in msg or "Histogram matching" in msg:
             return
 
@@ -74,18 +72,15 @@ class App(ctk.CTk):
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        # Fonts
         self.font_title = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
         self.font_body = ctk.CTkFont(family="Segoe UI", size=13)
         self.font_small = ctk.CTkFont(family="Segoe UI", size=11)
         self.font_button = ctk.CTkFont(family="Segoe UI", size=13, weight="bold")
         self.font_run = ctk.CTkFont(family="Segoe UI", size=16, weight="bold")
 
-        # Load GUI configuration
         self.config_file = os.path.join(CURRENT_DIR, "gui_config.json")
         self.load_settings()
 
-        # Layout setup
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
@@ -103,7 +98,6 @@ class App(ctk.CTk):
         self.processing_thread = None
         self.setup_gui_logging()
 
-    # ── Config Persistence ──────────────────────────────────────────
 
     def load_settings(self):
         self.settings = {
@@ -139,7 +133,6 @@ class App(ctk.CTk):
     def build_process_tab(self):
         self.tab_process.grid_columnconfigure(0, weight=1)
 
-        # Mode selection
         frame_mode = ctk.CTkFrame(self.tab_process, corner_radius=8)
         frame_mode.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
 
@@ -157,7 +150,6 @@ class App(ctk.CTk):
             value="FOLDER", font=self.font_body, command=self.update_mode_ui,
         ).pack(side="left", padx=10)
 
-        # Input / Output paths
         frame_paths = ctk.CTkFrame(self.tab_process, corner_radius=8)
         frame_paths.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
         frame_paths.grid_columnconfigure(1, weight=1)
@@ -189,7 +181,6 @@ class App(ctk.CTk):
             fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.browse_output,
         ).grid(row=1, column=2, padx=(5, 15), pady=8)
 
-        # Module toggles
         frame_modules = ctk.CTkFrame(self.tab_process, corner_radius=8)
         frame_modules.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
 
@@ -214,7 +205,6 @@ class App(ctk.CTk):
             variable=self.chk_seg_var, font=self.font_body,
         ).pack(side="left", padx=12, pady=10)
 
-        # Run button + progress bar
         frame_run = ctk.CTkFrame(
             self.tab_process, corner_radius=8, fg_color="transparent"
         )
@@ -232,7 +222,6 @@ class App(ctk.CTk):
         self.progress.grid(row=1, column=0, padx=0, pady=(0, 5), sticky="ew")
         self.progress.set(0)
 
-        # Log textbox
         self.log_textbox = ctk.CTkTextbox(
             self.tab_process, height=200, font=self.font_small,
             corner_radius=8, state="disabled",
@@ -267,7 +256,7 @@ class App(ctk.CTk):
             self.output_var.set(path)
 
     def _auto_suggest_output(self, input_path):
-        """Auto-fill output folder when input is selected and output is empty."""
+        """Auto-fill output if empty."""
         if self.output_var.get():
             return
         if os.path.isfile(input_path):
@@ -279,7 +268,7 @@ class App(ctk.CTk):
     # ── Laterality Prompt ───────────────────────────────────────────
 
     def ask_laterality(self, filename):
-        """Thread-safe laterality prompt called from the worker thread."""
+        """Thread-safe laterality dialog. Blocks worker until user responds."""
         result = {"value": "Left"}
         event = threading.Event()
 
@@ -293,7 +282,6 @@ class App(ctk.CTk):
             dialog.lift()
             dialog.focus_force()
 
-            # Center on parent window
             self.update_idletasks()
             x = self.winfo_x() + (self.winfo_width() - 420) // 2
             y = self.winfo_y() + (self.winfo_height() - 220) // 2
@@ -341,14 +329,6 @@ class App(ctk.CTk):
     # ── Processing Logic ────────────────────────────────────────────
 
     def start_processing(self):
-        try:
-            import mri_pipeline  # noqa: F401
-        except ImportError as e:
-            messagebox.showerror(
-                "Import Error", f"Could not load pipeline module:\n{e}"
-            )
-            return
-
         if self.processing_thread and self.processing_thread.is_alive():
             messagebox.showwarning("Warning", "Analysis is already running!")
             return
@@ -370,23 +350,20 @@ class App(ctk.CTk):
         self.log_textbox.delete("0.0", "end")
         self.log_textbox.configure(state="disabled")
 
-        # Set pipeline config
-        import mri_pipeline
-
-        mri_pipeline.CONFIG["mode"] = self.mode_var.get()
-        mri_pipeline.CONFIG["input_path"] = inp
-        mri_pipeline.CONFIG["input_dir"] = inp
-        mri_pipeline.CONFIG["output_dir"] = out
-
-        mri_pipeline.CONFIG["run_inference"] = self.chk_inference_var.get()
-        mri_pipeline.CONFIG["run_anatomical_analysis"] = self.chk_anatomy_var.get()
-        mri_pipeline.CONFIG["run_segmentation_analysis"] = self.chk_seg_var.get()
-
-        # Apply settings
-        mri_pipeline.CONFIG["anaknee_ref_mri"] = self.settings["anaknee_ref_mri"]
-        mri_pipeline.CONFIG["model_ckpt"] = self.settings["model_ckpt"]
-        mri_pipeline.CONFIG["ensemble_dir"] = self.settings["ensemble_dir"]
-        mri_pipeline.CONFIG["gt_masks_dir"] = self.settings["gt_masks_dir"]
+        # Gather config from UI (avoid heavy imports on main thread)
+        self._thread_config = {
+            "mode": self.mode_var.get(),
+            "input_path": inp,
+            "input_dir": inp,
+            "output_dir": out,
+            "run_inference": self.chk_inference_var.get(),
+            "run_anatomical_analysis": self.chk_anatomy_var.get(),
+            "run_segmentation_analysis": self.chk_seg_var.get(),
+            "anaknee_ref_mri": self.settings["anaknee_ref_mri"],
+            "model_ckpt": self.settings["model_ckpt"],
+            "ensemble_dir": self.settings["ensemble_dir"],
+            "gt_masks_dir": self.settings["gt_masks_dir"],
+        }
 
         self.processing_thread = threading.Thread(
             target=self.run_pipeline_thread, daemon=True
@@ -394,9 +371,8 @@ class App(ctk.CTk):
         self.processing_thread.start()
 
     def run_pipeline_thread(self):
-        import mri_pipeline
-
         try:
+            import mri_pipeline
             import pandas as pd
             import torch
         except ImportError as e:
@@ -408,13 +384,16 @@ class App(ctk.CTk):
             )
             return
 
+        # Apply UI config to pipeline
+        for key, val in self._thread_config.items():
+            mri_pipeline.CONFIG[key] = val
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         try:
             mri_pipeline.setup_logging(
                 mri_pipeline.CONFIG["output_dir"], "pipeline.log"
             )
-            # Re-add log handler after setup_logging config override
             logging.getLogger().addHandler(self.log_handler)
 
             logging.info(f"==== Analysis started (Device: {device}) ====")
@@ -457,7 +436,6 @@ class App(ctk.CTk):
             out = mri_pipeline.CONFIG["output_dir"]
             results_list = []
 
-            # Detect DICOM input and convert if needed
             files_to_process = []
 
             if mri_pipeline.CONFIG["mode"] == "FILE":
@@ -479,7 +457,6 @@ class App(ctk.CTk):
                     )
                     logging.info(f"Found {len(files_to_process)} NIfTI files.")
 
-            # Process each file
             for f in files_to_process:
                 try:
                     res = mri_pipeline.process_single_volume(
@@ -502,7 +479,6 @@ class App(ctk.CTk):
                     out, mri_pipeline.CONFIG["gt_masks_dir"]
                 )
 
-            # Save results
             csv_path = os.path.join(out, "patient_results.csv")
             if results_list:
                 df = pd.DataFrame(results_list)
@@ -516,11 +492,9 @@ class App(ctk.CTk):
 
             logging.info("==== Analysis complete ====")
 
-            # Refresh dashboard
             if os.path.exists(csv_path):
                 self.after(0, lambda: self.load_dashboard_data(csv_path))
 
-            # Show completion summary
             n = len(results_list)
             self.after(0, lambda: self.show_completion_summary(n, out))
 
@@ -545,7 +519,7 @@ class App(ctk.CTk):
     # ── Completion Summary ──────────────────────────────────────────
 
     def show_completion_summary(self, num_files, output_dir):
-        """Show a summary dialog after processing completes."""
+        """Post-processing summary with Open Folder button."""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Analysis Complete")
         dialog.geometry("450x250")
@@ -554,7 +528,6 @@ class App(ctk.CTk):
         dialog.grab_set()
         dialog.lift()
 
-        # Center on parent window
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() - 450) // 2
         y = self.winfo_y() + (self.winfo_height() - 250) // 2
@@ -598,7 +571,7 @@ class App(ctk.CTk):
 
     @staticmethod
     def _open_folder(path):
-        """Open folder in system file explorer."""
+        """Open folder in OS file explorer."""
         try:
             if sys.platform == "win32":
                 os.startfile(path)
@@ -615,7 +588,6 @@ class App(ctk.CTk):
         self.tab_dashboard.grid_columnconfigure(0, weight=1)
         self.tab_dashboard.grid_rowconfigure(1, weight=1)
 
-        # Top controls
         frame_controls = ctk.CTkFrame(self.tab_dashboard, corner_radius=8)
         frame_controls.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
@@ -646,11 +618,9 @@ class App(ctk.CTk):
             command=self._open_results_folder,
         ).pack(side="right", padx=10, pady=10)
 
-        # Graph area
         self.frame_graph = ctk.CTkFrame(self.tab_dashboard, corner_radius=8)
         self.frame_graph.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
 
-        # 3D visualization section
         frame_viz = ctk.CTkFrame(self.tab_dashboard, corner_radius=8)
         frame_viz.grid(row=2, column=0, padx=10, pady=(5, 10), sticky="ew")
 
@@ -665,10 +635,11 @@ class App(ctk.CTk):
         )
         self.opt_scan.pack(side="left", padx=5)
 
-        ctk.CTkButton(
+        self.btn_show_3d = ctk.CTkButton(
             frame_viz, text="Show 3D", font=self.font_body,
             fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.show_3d,
-        ).pack(side="left", padx=10)
+        )
+        self.btn_show_3d.pack(side="left", padx=10)
 
         self.df_patient = None
         self.current_csv_dir = ""
@@ -701,7 +672,6 @@ class App(ctk.CTk):
             self.df_patient = pd.read_csv(csv_path)
             self.current_csv_dir = os.path.dirname(csv_path)
 
-            # Populate scan option menu
             if "Filename" in self.df_patient.columns:
                 scans = self.df_patient["Filename"].tolist()
                 self.opt_scan.configure(values=scans)
@@ -726,7 +696,6 @@ class App(ctk.CTk):
         if metric not in self.df_patient.columns:
             return
 
-        # Clear previous plot
         for widget in self.frame_graph.winfo_children():
             widget.destroy()
 
@@ -736,7 +705,6 @@ class App(ctk.CTk):
         for spine in ax.spines.values():
             spine.set_color("#333355")
 
-        # Generate X labels from filenames or index
         x_labels = (
             self.df_patient["Filename"].apply(
                 lambda x: str(x).split("_")[0][:12]
@@ -777,15 +745,20 @@ class App(ctk.CTk):
             messagebox.showinfo("Info", "Select a scan first.")
             return
 
-        # Attempt to locate source image
-        img_path = os.path.join(
-            mri_pipeline.CONFIG.get("input_dir", ""), filename
-        )
-        if not os.path.exists(img_path):
-            img_path = os.path.join(self.current_csv_dir, filename)
+        # Search for original scan in likely locations
+        search_dirs = [
+            os.path.dirname(mri_pipeline.CONFIG.get("input_path", "")),
+            mri_pipeline.CONFIG.get("input_dir", ""),
+            self.current_csv_dir,
+        ]
+        img_path = ""
+        for d in search_dirs:
+            candidate = os.path.join(d, filename)
+            if os.path.exists(candidate):
+                img_path = candidate
+                break
 
-        # Fallback to manual selection if not found
-        if not os.path.exists(img_path):
+        if not img_path:
             messagebox.showinfo(
                 "File Not Found",
                 f"Original scan '{filename}' not found.\n"
@@ -809,7 +782,9 @@ class App(ctk.CTk):
 
         ref_path = self.settings["anaknee_ref_mri"]
 
-        # Run visualization in worker thread to prevent GUI freezing
+        # Give visual feedback
+        self.btn_show_3d.configure(state="disabled", text="Loading 3D...")
+
         def worker():
             try:
                 mri_pipeline.run_visualization_only(
@@ -821,6 +796,14 @@ class App(ctk.CTk):
                     lambda: messagebox.showerror(
                         "3D Error", f"Could not open 3D viewer:\n{e}"
                     ),
+                )
+            finally:
+                # Restore button state
+                self.after(
+                    0,
+                    lambda: self.btn_show_3d.configure(
+                        state="normal", text="Show 3D"
+                    )
                 )
 
         threading.Thread(target=worker, daemon=True).start()

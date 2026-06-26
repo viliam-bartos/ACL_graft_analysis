@@ -24,7 +24,6 @@ from monai.metrics import (
 from monai.transforms import AsDiscrete
 
 
-# Resolve imports across directories
 CURRENT_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = CURRENT_DIR.parent
 
@@ -43,7 +42,6 @@ from main_acl_analysis import run_analysis  # noqa: E402
 from visualizator_analyzator import visualize_results  # noqa: E402
 
 
-# Laterality patterns for filename regex matching
 _RIGHT_PATTERN = re.compile(
     r"(?:^|[_\-\s\.])(right|dexter|dext|dx|rt|prav[áaéeý]?)(?:$|[_\-\s\.])",
     re.IGNORECASE,
@@ -55,7 +53,7 @@ _LEFT_PATTERN = re.compile(
 
 
 def classify_laterality(file_path: str):
-    """Classifies laterality from filename. Returns 'Left', 'Right', or None."""
+    """Returns 'Left', 'Right', or None based on filename."""
     basename = os.path.basename(file_path)
     name_without_ext = basename.split(".")[0]
 
@@ -72,7 +70,7 @@ def classify_laterality(file_path: str):
 
 
 def is_dicom_input(path):
-    """Check if path points to DICOM data (file or directory with DICOM series)."""
+    """True if path is a DICOM file or folder with DICOM series."""
     if not os.path.exists(path):
         return False
     if os.path.isfile(path):
@@ -87,7 +85,7 @@ def is_dicom_input(path):
 
 
 def convert_dicom_to_nifti(dicom_path, output_dir):
-    """Convert DICOM series to NIfTI using SimpleITK. Returns list of NIfTI paths."""
+    """Convert DICOM series to NIfTI via SimpleITK. Returns output paths."""
     os.makedirs(output_dir, exist_ok=True)
 
     if os.path.isfile(dicom_path):
@@ -123,7 +121,6 @@ def convert_dicom_to_nifti(dicom_path, output_dir):
     return nifti_paths
 
 
-# Central configuration parameters
 CONFIG = {
     "mode": "FILE",  # "FILE" or "FOLDER"
     "input_path": r"Data\reference\right_case_074.nii.gz",
@@ -141,7 +138,7 @@ CONFIG = {
     "run_inference": 1,
     "run_segmentation_analysis": 0,
     "run_anatomical_analysis": 1,
-    # Post-processing config (1: ACL, 2: Femur, 3: Tibia)
+    # Post-processing (1: ACL, 2: Femur, 3: Tibia)
     "post_proc_classes": {
         1: {"lcc": True, "hole_filling": False, "closing": False},
         2: {"lcc": True, "hole_filling": True, "closing": True, "closing_kernel": 2},
@@ -169,7 +166,7 @@ def setup_logging(output_dir, log_file_name):
 
 
 def resample_image_sitk(sitk_img, target_spacing=(0.5, 0.5, 0.5)):
-    """Resamples the input image to target spacing using B-Spline interpolation."""
+    """Resamples to target spacing using B-Spline interpolation."""
     original_spacing = sitk_img.GetSpacing()
     if np.allclose(original_spacing, target_spacing, atol=1e-3):
         logging.info("  -> Spacing is already correct, skipping resample.")
@@ -194,7 +191,7 @@ def resample_image_sitk(sitk_img, target_spacing=(0.5, 0.5, 0.5)):
 
 
 def force_reorient_pil(nifti_path):
-    """Enforces PIL orientation (ASR) via nibabel."""
+    """Enforces PIL (ASR) orientation via nibabel."""
     img = nib.load(nifti_path)
     target_ornt = nio.axcodes2ornt("PIL")
     orig_ornt = nio.io_orientation(img.affine)
@@ -209,7 +206,7 @@ def force_reorient_pil(nifti_path):
 
 
 def postprocess_mask(mask_array, config_classes):
-    """Applies modular post-processing (LCC, hole filling, closing) on label masks."""
+    """Applies LCC, hole filling, closing per label."""
     output_mask = np.zeros_like(mask_array)
     unique_labels = np.unique(mask_array)
 
@@ -245,20 +242,16 @@ def postprocess_mask(mask_array, config_classes):
 
 
 def _preprocess_image(img_path):
-    """Normalizes and scales the NIfTI volume intensities for inference."""
+    """Normalizes NIfTI volume intensities for inference."""
     sitk_img = sitk.ReadImage(img_path)
     img_array = sitk.GetArrayFromImage(sitk_img).astype(np.float32)
 
-    # Transpose to (X, Y, Z) for the model
     img_array = np.transpose(img_array, (2, 1, 0))
-
-    # Scale intensities based on percentiles
     p05 = np.percentile(img_array, 0.5)
     p995 = np.percentile(img_array, 99.5)
     img_array = np.clip(img_array, p05, p995)
     img_array = img_array - p05
 
-    # Normalize intensity
     non_zero = img_array > 0
     if np.any(non_zero):
         img_array[non_zero] = (img_array[non_zero] - img_array[non_zero].mean()) / (
@@ -269,7 +262,7 @@ def _preprocess_image(img_path):
 
 
 def _apply_thresholds(probs):
-    """Applies prediction thresholds to the class probability map."""
+    """Applies per-class thresholds to probability map."""
     pred_argmax = torch.argmax(probs, dim=0)  # [X, Y, Z]
     pred = torch.zeros_like(pred_argmax)
     pred[(pred_argmax == 1) & (probs[1] >= 0.45)] = 1  # ACL
@@ -279,7 +272,7 @@ def _apply_thresholds(probs):
 
 
 def infer_model(img_path, model, device, config):
-    """Runs single-model inference using sliding window method."""
+    """Single-model sliding window inference."""
     img_array = _preprocess_image(img_path)
     tensor = torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).to(device)
 
@@ -303,7 +296,7 @@ def infer_model(img_path, model, device, config):
 
 
 def infer_ensemble(img_path, ensemble_models, device, config):
-    """Runs ensemble inference across fold models and averages the probabilities."""
+    """Ensemble inference averaging probabilities across folds."""
     logging.info(f"  -> Ensemble inference with {len(ensemble_models)} models.")
     img_array = _preprocess_image(img_path)
     tensor = torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).to(device)
@@ -343,7 +336,7 @@ def infer_ensemble(img_path, ensemble_models, device, config):
 
 
 def perform_segmentation_analysis(output_dir, gt_dir):
-    """Computes Dice and HD95 metrics relative to ground truth segmentations."""
+    """Computes Dice and HD95 vs ground truth."""
     logging.info("--- Starting Segmentation Metrics Analysis ---")
 
     results = []
@@ -365,7 +358,6 @@ def perform_segmentation_analysis(output_dir, gt_dir):
 
         file_id = match.group(1)
 
-        # Locate corresponding GT mask
         gt_search_pattern = os.path.join(gt_dir, f"*{file_id}*.nii.gz")
         gt_matches = glob.glob(gt_search_pattern)
 
@@ -435,7 +427,6 @@ def perform_segmentation_analysis(output_dir, gt_dir):
     df.to_csv(csv_path, index=False)
     logging.info(f"Metrics saved to: {csv_path}")
 
-    # Plot results
     plt.figure(figsize=(14, 6))
     sns.set_theme(style="whitegrid")
 
@@ -459,7 +450,7 @@ def process_single_volume(
     file_path, model, device, run_viz_at_end=False, ensemble_models=None,
     laterality_callback=None,
 ):
-    """Main processing pipeline for a single MRI volume."""
+    """Main pipeline for a single MRI volume."""
     logging.info(f"====== START PROCESSING: {os.path.basename(file_path)} ======")
 
     if not os.path.exists(file_path):
@@ -467,7 +458,6 @@ def process_single_volume(
 
     orig_sitk = sitk.ReadImage(file_path)
 
-    # Setup temporary file paths
     temp_nifti_path = os.path.join(
         CONFIG["output_dir"], f"process_raw_{os.path.basename(file_path)}"
     )
@@ -537,7 +527,7 @@ def process_single_volume(
         meta_sitk = sitk.ReadImage(temp_nifti_path)
         mask_sitk.CopyInformation(meta_sitk)
 
-        # Resample back to original raw spacing and shape
+        # Resample mask back to original space
         logging.info("  -> Resampling mask back to original input space.")
         resampler = sitk.ResampleImageFilter()
         resampler.SetReferenceImage(orig_sitk)
@@ -557,11 +547,7 @@ def process_single_volume(
                 run_analysis(file_path, ref_path, final_mask_path)
             )
 
-            # Append results to CSV
-            df = pd.DataFrame([res_dict])
-            csv_path = os.path.join(CONFIG["output_dir"], "anaknee_results.csv")
-            header = not os.path.exists(csv_path)
-            df.to_csv(csv_path, mode="a", header=header, index=False)
+            # The result is returned and saved into patient_results.csv by the caller.
 
             if run_viz_at_end:
                 vis_data = {
@@ -595,7 +581,7 @@ def process_single_volume(
 
 
 def _load_ensemble_models(config, device):
-    """Loads all fold model checkpoints for ensemble inference."""
+    """Loads fold checkpoints for ensemble inference."""
     fold_weight_paths = sorted(
         glob.glob(os.path.join(config["ensemble_dir"], config["ensemble_pattern"]))
     )
@@ -622,7 +608,7 @@ def _load_ensemble_models(config, device):
 
 
 def run_visualization_only(img_path, ref_path, mask_path):
-    """Runs a quick anatomical analysis and opens PyVista viewer without logging CSV."""
+    """Quick analysis + PyVista 3D viewer (no CSV logging)."""
     from anaknee.main_acl_analysis import run_analysis
     from anaknee.visualizator_analyzator import visualize_results
     try:
@@ -652,7 +638,6 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
 
-    # Load models
     model = None
     ensemble_models = []
 
