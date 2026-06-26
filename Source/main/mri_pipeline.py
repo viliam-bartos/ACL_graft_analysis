@@ -19,15 +19,11 @@ import torch
 from monai.inferers import sliding_window_inference
 from monai.metrics import (
     DiceMetric,
-    HausdorffDistanceMetric,
     compute_hausdorff_distance,
 )
 from monai.transforms import AsDiscrete
-from monai.data import decollate_batch
 
-# -------------------------------------------------------------------------
-# OŠETŘENÍ IMPORTŮ MEZI SLOŽKAMI (přidání do sys.path)
-# -------------------------------------------------------------------------
+
 CURRENT_DIR = Path(__file__).resolve().parent
 SOURCE_DIR = CURRENT_DIR.parent
 
@@ -46,32 +42,20 @@ from main_acl_analysis import run_analysis  # noqa: E402
 from visualizator_analyzator import visualize_results  # noqa: E402
 
 
-# -------------------------------------------------------------------------
-# REGEX KLASIFIKACE LATERALITY Z NÁZVU SOUBORU
-# -------------------------------------------------------------------------
-# Vzory pro pravou stranu (zrcadlení se provede)
 _RIGHT_PATTERN = re.compile(
     r"(?:^|[_\-\s\.])(right|dexter|dext|dx|rt|prav[áaéeý]?)(?:$|[_\-\s\.])",
     re.IGNORECASE,
 )
-# Vzory pro levou stranu (bez zrcadlení)
 _LEFT_PATTERN = re.compile(
     r"(?:^|[_\-\s\.])(left|sinister|sinist|sin|lt|lev[áaéeý]?)(?:$|[_\-\s\.])",
     re.IGNORECASE,
 )
 
 
-def classify_laterality(file_path: str) -> str:
-    """
-    Klasifikace laterality kolene z názvu souboru pomocí regex.
-
-    Vrací:
-        "Right" – pokud název obsahuje right/r/dx/dexter/rt/pravá apod.
-        "Left"  – pokud název obsahuje left/l/sin/sinister/lt/levá apod.
-        "Left"  – default pokud nelze určit (model trénován na levé straně)
-    """
+def classify_laterality(file_path: str):
+    """Returns 'Left', 'Right', or None based on filename."""
     basename = os.path.basename(file_path)
-    name_without_ext = basename.split(".")[0]  # Odebereme přípony (.nii.gz atd.)
+    name_without_ext = basename.split(".")[0]
 
     has_right = _RIGHT_PATTERN.search(name_without_ext)
     has_left = _LEFT_PATTERN.search(name_without_ext)
@@ -80,50 +64,81 @@ def classify_laterality(file_path: str) -> str:
         return "Right"
     elif has_left and not has_right:
         return "Left"
-    elif has_right and has_left:
-        # Obě klíčová slova nalezena – logujeme varování, defaultujeme na Left
-        logging.warning(
-            f"Název '{basename}' obsahuje vzory pro obě strany. Defaultuji na Left (bez zrcadlení)."
-        )
-        return "Left"
     else:
-        # Žádný vzor nenalezen – defaultujeme na Left (model trénován na levé)
-        logging.warning(
-            f"Lateralita nebyla rozpoznána z názvu '{basename}'. Defaultuji na Left (bez zrcadlení)."
+        logging.info(f"Laterality not detected in filename: '{basename}'")
+        return None
+
+
+def is_dicom_input(path):
+    """True if path is a DICOM file or folder with DICOM series."""
+    if not os.path.exists(path):
+        return False
+    if os.path.isfile(path):
+        return path.lower().endswith(".dcm")
+    if os.path.isdir(path):
+        try:
+            series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(path)
+            return len(series_ids) > 0
+        except Exception:
+            return False
+    return False
+
+
+def convert_dicom_to_nifti(dicom_path, output_dir):
+    """Convert DICOM series to NIfTI via SimpleITK. Returns output paths."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    if os.path.isfile(dicom_path):
+        dicom_dir = os.path.dirname(dicom_path)
+    else:
+        dicom_dir = dicom_path
+
+    series_ids = sitk.ImageSeriesReader.GetGDCMSeriesIDs(dicom_dir)
+    if not series_ids:
+        raise ValueError(f"No DICOM series found in: {dicom_dir}")
+
+    reader = sitk.ImageSeriesReader()
+    nifti_paths = []
+
+    for idx, series_id in enumerate(series_ids):
+        dicom_names = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(
+            dicom_dir, series_id
         )
-        return "Left"
+        reader.SetFileNames(dicom_names)
+        image = reader.Execute()
+
+        if len(series_ids) == 1:
+            folder_name = os.path.basename(os.path.normpath(dicom_dir))
+            output_name = f"{folder_name}.nii.gz"
+        else:
+            output_name = f"series_{idx}.nii.gz"
+
+        output_path = os.path.join(output_dir, output_name)
+        sitk.WriteImage(image, output_path)
+        logging.info(f"  -> DICOM series converted: {output_path}")
+        nifti_paths.append(output_path)
+
+    return nifti_paths
 
 
-# -------------------------------------------------------------------------
-# CENTRÁLNÍ KONFIGURACE (VŠECHNY PARAMETRY ZDE)
-# -------------------------------------------------------------------------
 CONFIG = {
-    # ZÁKLADNÍ MÓD A CESTY
-    "mode": "FILE",  # "FILE" nebo "FOLDER"
-    "input_path": r"C:\ACL_analysis\ACL_graft_analysis\Data\reference\right_case_074.nii.gz",  # Použije se pro FILE
-    "input_dir": r"",  # Použije se pro FOLDER
-    "output_dir": r"C:\ACL_analysis\ACL_graft_analysis\Data\reference\vysledky_074",
-    "log_file": "pipeline.log",  # Vytvoří se uvnitř output_dir
-    # ANAKNEE
-    "anaknee_ref_mri": r"C:\ACL_analysis\ACL_graft_analysis\Data\reference\right_case_074.nii.gz",
-    # GROUND TRUTH A ANALÝZA METRIK
+    "mode": "FILE",  # "FILE" or "FOLDER"
+    "input_path": r"Data\reference\right_case_074.nii.gz",
+    "input_dir": r"",
+    "output_dir": r"Data\reference\vysledky_074",
+    "log_file": "pipeline.log",
+    "anaknee_ref_mri": r"Data\reference\right_case_074.nii.gz",
     "gt_masks_dir": r"",
-    # MODEL SÍŤ (Blackwell)
     "model_ckpt": r"",
     "patch_size": (128, 128, 80),
     "base_filters": 64,
-    # ENSEMBLE INFERENCE (5-Fold Cross-Validation)
-    # Pokud je True, načtou se váhy ze všech foldů a pravděpodobnosti se průměrují.
-    # Pokud je False, použije se pouze model_ckpt (single model).
     "use_ensemble": True,
-    "ensemble_dir": r"C:\ACL_analysis\ACL_graft_analysis\Data\5CV",
-    "ensemble_pattern": "best_model_fold_*.pth",  # glob vzor pro vyhledávání vah foldů
-    # PŘEPÍNAČE MODULŮ
+    "ensemble_dir": r"Data\5CV",
+    "ensemble_pattern": "best_model_fold_*.pth",
     "run_inference": 1,
     "run_segmentation_analysis": 0,
     "run_anatomical_analysis": 1,
-    # POST-PROCESSING TŘÍDY
-    # 1: ACL, 2: Femur, 3: Tibia
+    # Post-processing (1: ACL, 2: Femur, 3: Tibia)
     "post_proc_classes": {
         1: {"lcc": True, "hole_filling": False, "closing": False},
         2: {"lcc": True, "hole_filling": True, "closing": True, "closing_kernel": 2},
@@ -132,14 +147,10 @@ CONFIG = {
 }
 
 
-# -------------------------------------------------------------------------
-# FUNKCE MODULŮ
-# -------------------------------------------------------------------------
 def setup_logging(output_dir, log_file_name):
     os.makedirs(output_dir, exist_ok=True)
     log_path = os.path.join(output_dir, log_file_name)
 
-    # Odebereme staré handlery při opakovaném spuštění
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
@@ -155,13 +166,13 @@ def setup_logging(output_dir, log_file_name):
 
 
 def resample_image_sitk(sitk_img, target_spacing=(0.5, 0.5, 0.5)):
-    """Resampling do fyzického rozlišení"""
+    """Resamples to target spacing using B-Spline interpolation."""
     original_spacing = sitk_img.GetSpacing()
     if np.allclose(original_spacing, target_spacing, atol=1e-3):
-        logging.info("  -> Spacing je správný, vynechávám resample.")
+        logging.info("  -> Spacing is already correct, skipping resample.")
         return sitk_img
 
-    logging.info(f"  -> Provádím resample z {original_spacing} na {target_spacing}")
+    logging.info(f"  -> Resampling from {original_spacing} to {target_spacing}")
     orig_size = np.array(sitk_img.GetSize(), dtype=int)
     new_size = np.round(
         orig_size * (np.array(original_spacing) / np.array(target_spacing))
@@ -174,28 +185,28 @@ def resample_image_sitk(sitk_img, target_spacing=(0.5, 0.5, 0.5)):
     resample.SetOutputOrigin(sitk_img.GetOrigin())
     resample.SetTransform(sitk.Transform())
     resample.SetDefaultPixelValue(sitk_img.GetPixelIDValue())
-    resample.SetInterpolator(sitk.sitkBSpline)  # plynulý b-spline pro raw data
+    resample.SetInterpolator(sitk.sitkBSpline)
 
     return resample.Execute(sitk_img)
 
 
 def force_reorient_pil(nifti_path):
-    """ASR kontrola a tranformace přes nibabel.orientations"""
+    """Enforces PIL (ASR) orientation via nibabel."""
     img = nib.load(nifti_path)
     target_ornt = nio.axcodes2ornt("PIL")
     orig_ornt = nio.io_orientation(img.affine)
     transform = nio.ornt_transform(orig_ornt, target_ornt)
 
     if not np.array_equal(transform, [[0, 1], [1, 1], [2, 1]]):
-        logging.info("  -> Orientace není ASR (PIL), aplikuji transformaci.")
+        logging.info("  -> Orientation is not PIL, applying reorientation.")
         new_img = img.as_reoriented(transform)
         nib.save(new_img, nifti_path)
     else:
-        logging.info("  -> Orientace je správně ASR, bez měnění.")
+        logging.info("  -> Orientation is already PIL.")
 
 
 def postprocess_mask(mask_array, config_classes):
-    """Modulární post-processing v rámci tříd na zadaném numpy poli"""
+    """Applies LCC, hole filling, closing per label."""
     output_mask = np.zeros_like(mask_array)
     unique_labels = np.unique(mask_array)
 
@@ -208,11 +219,9 @@ def postprocess_mask(mask_array, config_classes):
         if lbl in config_classes:
             cfg = config_classes[lbl]
 
-            # Hole filling
             if cfg.get("hole_filling", False):
                 lbl_mask = ndimage.binary_fill_holes(lbl_mask)
 
-            # Closing
             if cfg.get("closing", False):
                 k_size = cfg.get("closing_kernel", 2)
                 struct = ndimage.generate_binary_structure(3, 1)
@@ -220,7 +229,6 @@ def postprocess_mask(mask_array, config_classes):
                     struct = ndimage.iterate_structure(struct, k_size)
                 lbl_mask = ndimage.binary_closing(lbl_mask, structure=struct)
 
-            # Largest Connected Component
             if cfg.get("lcc", False):
                 labeled, num_features = ndimage.label(lbl_mask)
                 if num_features > 0:
@@ -234,20 +242,16 @@ def postprocess_mask(mask_array, config_classes):
 
 
 def _preprocess_image(img_path):
-    """Společné předzpracování obrazu pro single i ensemble inference."""
+    """Normalizes NIfTI volume intensities for inference."""
     sitk_img = sitk.ReadImage(img_path)
     img_array = sitk.GetArrayFromImage(sitk_img).astype(np.float32)
 
-    # Transpozice z (Z, Y, X) do (X, Y, Z) pro model
     img_array = np.transpose(img_array, (2, 1, 0))
-
-    # Skálování intenzit (MONAI ScaleIntensityRangePercentilesd logika s ořezáním, bez redundantního dělení)
     p05 = np.percentile(img_array, 0.5)
     p995 = np.percentile(img_array, 99.5)
     img_array = np.clip(img_array, p05, p995)
     img_array = img_array - p05
 
-    # Standardize (NormalizeIntensityd channel wise na non-zero)
     non_zero = img_array > 0
     if np.any(non_zero):
         img_array[non_zero] = (img_array[non_zero] - img_array[non_zero].mean()) / (
@@ -258,11 +262,7 @@ def _preprocess_image(img_path):
 
 
 def _apply_thresholds(probs):
-    """
-    Aplikace uživatelských prahů na tenzor pravděpodobností.
-    probs: torch.Tensor tvaru [4, X, Y, Z] (softmax pravděpodobnosti)
-    Vrací: torch.Tensor tvaru [X, Y, Z] s hodnotami 0–3.
-    """
+    """Applies per-class thresholds to probability map."""
     pred_argmax = torch.argmax(probs, dim=0)  # [X, Y, Z]
     pred = torch.zeros_like(pred_argmax)
     pred[(pred_argmax == 1) & (probs[1] >= 0.45)] = 1  # ACL
@@ -272,7 +272,7 @@ def _apply_thresholds(probs):
 
 
 def infer_model(img_path, model, device, config):
-    """Single-model inference sekce s monai sliding window."""
+    """Single-model sliding window inference."""
     img_array = _preprocess_image(img_path)
     tensor = torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).to(device)
 
@@ -287,37 +287,21 @@ def infer_model(img_path, model, device, config):
                 overlap=0.5,
                 mode="gaussian",
             )
-        probs = torch.softmax(outputs, dim=1).squeeze(0)  # [4, X, Y, Z]
+        probs = torch.softmax(outputs, dim=1).squeeze(0)
         pred = _apply_thresholds(probs)
 
     pred_np = pred.cpu().numpy()
-    # Transpozice zpět z (X, Y, Z) do (Z, Y, X) pro uložení přes SimpleITK
-    pred_np = np.transpose(pred_np, (2, 1, 0))
+    pred_np = np.transpose(pred_np, (2, 1, 0)) # Transpose back to (Z, Y, X)
     return pred_np
 
 
 def infer_ensemble(img_path, ensemble_models, device, config):
-    """
-    Ensemble inference: průměrování softmax pravděpodobností ze všech fold modelů.
-
-    Každý model zpracuje celý objem přes sliding window inference.
-    Výsledné pravděpodobnostní mapy se průměrují (simple average ensemble).
-    Thresholdy se aplikují jednou na průměrné pravděpodobnosti.
-
-    Args:
-        img_path: cesta k vstupnímu NIfTI souboru
-        ensemble_models: list načtených PyTorch modelů (jeden per fold)
-        device: torch.device
-        config: CONFIG slovník s patch_size a thresholdovými hodnotami
-
-    Returns:
-        numpy array tvaru (Z, Y, X) s predikovanou maskou tříd 0–3
-    """
-    logging.info(f"  -> Ensemble inference s {len(ensemble_models)} fold modely.")
+    """Ensemble inference averaging probabilities across folds."""
+    logging.info(f"  -> Ensemble inference with {len(ensemble_models)} models.")
     img_array = _preprocess_image(img_path)
     tensor = torch.from_numpy(img_array).unsqueeze(0).unsqueeze(0).to(device)
 
-    accumulated_probs = None  # torch.Tensor [4, X, Y, Z]
+    accumulated_probs = None
 
     for fold_idx, model in enumerate(ensemble_models):
         model.eval()
@@ -331,78 +315,61 @@ def infer_ensemble(img_path, ensemble_models, device, config):
                     overlap=0.5,
                     mode="gaussian",
                 )
-            # 1. Odstranění z VRAM ihned po výpočtu do klasické RAM
             fold_probs = torch.softmax(outputs, dim=1).squeeze(0).cpu()
 
-            # 2. Uvolnění GPU paměti pro další fold
             del outputs
             torch.cuda.empty_cache()
 
-            logging.info(f"     Fold {fold_idx + 1}/{len(ensemble_models)} hotov.")
+            logging.info(f"     Fold {fold_idx + 1}/{len(ensemble_models)} complete.")
 
             if accumulated_probs is None:
                 accumulated_probs = fold_probs.clone()
             else:
                 accumulated_probs += fold_probs
 
-    # Průměrné pravděpodobnosti ze všech foldů
-    avg_probs = accumulated_probs / len(ensemble_models)  # [4, X, Y, Z]
-
-    # Aplikace thresholdů na průměrné pravděpodobnosti
+    avg_probs = accumulated_probs / len(ensemble_models)
     pred = _apply_thresholds(avg_probs)
 
     pred_np = pred.cpu().numpy()
-    # Transpozice zpět z (X, Y, Z) do (Z, Y, X) pro uložení přes SimpleITK
-    pred_np = np.transpose(pred_np, (2, 1, 0))
+    pred_np = np.transpose(pred_np, (2, 1, 0)) # Transpose back to (Z, Y, X)
     return pred_np
 
 
 def perform_segmentation_analysis(output_dir, gt_dir):
-    """Výpočet Dice/HD95 pomocí monai"""
-    logging.info("--- Spouštím Segmentační Analýzu ---")
+    """Computes Dice and HD95 vs ground truth."""
+    logging.info("--- Starting Segmentation Metrics Analysis ---")
 
     results = []
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
-    hd95_metric = HausdorffDistanceMetric(
-        include_background=False, percentile=95, reduction="mean_batch"
-    )
     post_func = AsDiscrete(to_onehot=4)
 
     pred_files = glob.glob(os.path.join(output_dir, "*.nii.gz"))
     if not pred_files:
-        logging.warning(
-            "Neočekávaně nenalezeny žádné výstupní masky. Segmentační analýza přeskočena."
-        )
+        logging.warning("No output masks found. Skipping metrics analysis.")
         return
 
     for p_path in pred_files:
         basename = os.path.basename(p_path)
 
-        # Extrakce ID pomocí regulárního výrazu (hledáme souvislou řadu čísel)
         match = re.search(r"(\d+)", basename)
         if not match:
-            logging.warning(f"Nelze extrahovat ID z názvu predikce: {basename}")
+            logging.warning(f"Could not extract ID from prediction filename: {basename}")
             continue
 
         file_id = match.group(1)
 
-        # Hledání odpovídající GT masky podle ID
         gt_search_pattern = os.path.join(gt_dir, f"*{file_id}*.nii.gz")
         gt_matches = glob.glob(gt_search_pattern)
 
         if not gt_matches:
-            logging.warning(f"GT maska nenalezena pro ID: {file_id} (z {basename})")
+            logging.warning(f"GT mask not found for ID: {file_id}")
             continue
 
         gt_path = gt_matches[0]
         if len(gt_matches) > 1:
-            logging.warning(
-                f"Nalezeno více GT masek pro ID {file_id}. Použije se: {os.path.basename(gt_path)}"
-            )
+            logging.warning(f"Multiple GT matches found for ID {file_id}. Using: {os.path.basename(gt_path)}")
 
-        logging.info(
-            f"Srovnávám GT vs. Pred pro ID {file_id}: {os.path.basename(gt_path)} vs {basename}"
-        )
+        logging.info(f"Comparing GT vs Pred for ID {file_id}")
 
         p_sitk = sitk.ReadImage(p_path)
         g_sitk = sitk.ReadImage(gt_path)
@@ -411,19 +378,15 @@ def perform_segmentation_analysis(output_dir, gt_dir):
         g_arr = sitk.GetArrayFromImage(g_sitk)
 
         try:
-            # Převedení do OHE a přidání dimenzí Batche a Channelu
             p_t = post_func(torch.from_numpy(p_arr).unsqueeze(0))
             g_t = post_func(torch.from_numpy(g_arr).unsqueeze(0))
-            # Zjištění fyzického spacingu z aktuálního NIfTI souboru (SimpleITK vrací tuple (dx, dy, dz))
+            
             dx, dy, dz = p_sitk.GetSpacing()
-            # Tenzory pro MONAI z Numpy mají tvar (Z, Y, X), takže spacing musíme do metriky poslat v tomtéž pořadí
             spacing_zyx = [dz, dy, dx]
 
-            # Výpočet Dice beze změny
             dice_metric(y_pred=[p_t], y=[g_t])
             dice = dice_metric.get_buffer()[-1]
 
-            # Přímý výpočet HD95 s použitím naměřeného fyzického spacingu
             hd95_tensor = compute_hausdorff_distance(
                 y_pred=p_t.unsqueeze(0),
                 y=g_t.unsqueeze(0),
@@ -431,7 +394,7 @@ def perform_segmentation_analysis(output_dir, gt_dir):
                 percentile=95,
                 spacing=spacing_zyx,
             )
-            hd95 = hd95_tensor[0]  # Výsledek má tvar [3] pro ACL, Femur, Tibii
+            hd95 = hd95_tensor[0]
 
             for class_idx, class_name in enumerate(["ACL", "Femur", "Tibia"]):
                 d_val = (
@@ -439,7 +402,7 @@ def perform_segmentation_analysis(output_dir, gt_dir):
                 )
                 try:
                     h_val = hd95[class_idx].item()
-                except:
+                except Exception:
                     h_val = float("nan")
 
                 results.append(
@@ -451,27 +414,25 @@ def perform_segmentation_analysis(output_dir, gt_dir):
                     }
                 )
         except Exception as e:
-            logging.error(f"Chyba při verifikaci {basename}: {e}")
+            logging.error(f"Error during verification of {basename}: {e}")
 
     if not results:
         return
 
-    # Uložení reportu
     df = pd.DataFrame(results)
     stats_dir = os.path.join(output_dir, "Segmentation_Reports")
     os.makedirs(stats_dir, exist_ok=True)
 
     csv_path = os.path.join(stats_dir, "segmentation_metrics.csv")
     df.to_csv(csv_path, index=False)
-    logging.info(f"Metriky uloženy do: {csv_path}")
+    logging.info(f"Metrics saved to: {csv_path}")
 
-    # Grafy
     plt.figure(figsize=(14, 6))
     sns.set_theme(style="whitegrid")
 
     plt.subplot(1, 2, 1)
     sns.boxplot(data=df, x="Struktura", y="Dice", palette="tab10")
-    plt.title("Dice Skóre", fontweight="bold")
+    plt.title("Dice Score", fontweight="bold")
     plt.ylim(0, 1.05)
 
     plt.subplot(1, 2, 2)
@@ -485,27 +446,21 @@ def perform_segmentation_analysis(output_dir, gt_dir):
     plt.close()
 
 
-# -------------------------------------------------------------------------
-# HLAVNÍ ENGINE
-# -------------------------------------------------------------------------
 def process_single_volume(
-    file_path, model, device, run_viz_at_end=False, ensemble_models=None
+    file_path, model, device, run_viz_at_end=False, ensemble_models=None,
+    laterality_callback=None,
 ):
-    logging.info(f"====== ZAČÁTEK ZPRACOVÁNÍ: {os.path.basename(file_path)} ======")
+    """Main pipeline for a single MRI volume."""
+    logging.info(f"====== START PROCESSING: {os.path.basename(file_path)} ======")
 
-    # Kontrola existence a načtení
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Vstupní soubor chybí: {file_path}")
+        raise FileNotFoundError(f"Input file missing: {file_path}")
 
     orig_sitk = sitk.ReadImage(file_path)
 
-    # Založíme si dočasný NIfTI pro mezikroky na disku (vyžadováno např. anaknee)
     temp_nifti_path = os.path.join(
         CONFIG["output_dir"], f"process_raw_{os.path.basename(file_path)}"
     )
-    # GT test filename matching expects 'mask_case_123.nii.gz' where case is original file name.
-    # Example input file target looks like `case_123.nii.gz` -> `mask_case_123.nii.gz`.
-    # Wait, the user said GT masks have prefix mask_ -> mask_case_ID. If output is already mask_case_ID...
     final_basename = os.path.basename(file_path)
     if not final_basename.startswith("mask_"):
         final_basename = f"mask_{final_basename}"
@@ -513,106 +468,87 @@ def process_single_volume(
 
     working_sitk = orig_sitk
 
-    # 1. RESAMPLING
+    # 1. Resampling
     working_sitk = resample_image_sitk(working_sitk, target_spacing=(0.5, 0.5, 0.5))
-
     sitk.WriteImage(working_sitk, temp_nifti_path)
 
-    # 2. ORIENTACE (in-place přes zápis)
+    # 2. Reorientation (Enforce PIL)
     force_reorient_pil(temp_nifti_path)
-    # Nyní aktualizujeme working_sitk s čerstvými orientacemi z disku
     working_sitk = sitk.ReadImage(temp_nifti_path)
 
-    # 3. KLASIFIKACE LATERALITY Z NÁZVU SOUBORU (regex)
+    # 3. Laterality classification and mirror flip if right knee
     is_flipped = False
     laterality = classify_laterality(file_path)
-    logging.info(f"  -> Lateralita z názvu souboru: {laterality}")
+
+    if laterality is None:
+        if laterality_callback:
+            laterality = laterality_callback(os.path.basename(file_path))
+        else:
+            laterality = "Left"
+            logging.warning(
+                f"  -> Laterality unknown for '{os.path.basename(file_path)}', defaulting to Left."
+            )
+
+    logging.info(f"  -> Laterality: {laterality}")
 
     if laterality == "Right":
-        logging.info(
-            "  -> Provádím zrcadlení pro Inference do LEVÉHO uspořádání (axis=0)."
-        )
+        logging.info("  -> Flipping right knee to match Left space (axis=0).")
         is_flipped = True
         arr = sitk.GetArrayFromImage(working_sitk)
         arr = np.flip(arr, axis=0)
         working_sitk = sitk.GetImageFromArray(arr)
-        working_sitk.CopyInformation(
-            sitk.ReadImage(temp_nifti_path)
-        )  # Zachová orig meta
+        working_sitk.CopyInformation(sitk.ReadImage(temp_nifti_path))
         sitk.WriteImage(working_sitk, temp_nifti_path)
 
-    # 4. INFERENCE (single model nebo ensemble)
+    # 4. Inference
     mask_arr = None
     if CONFIG["run_inference"]:
         if CONFIG.get("use_ensemble") and ensemble_models:
-            logging.info(
-                "  -> Spouštím ENSEMBLE multiclass inference (Blackwell 5-Fold)."
-            )
+            logging.info("  -> Running ensemble inference (5-Fold).")
             mask_arr = infer_ensemble(temp_nifti_path, ensemble_models, device, CONFIG)
         elif model:
-            logging.info("  -> Spouštím single-model multiclass inference (Blackwell).")
+            logging.info("  -> Running single-model inference.")
             mask_arr = infer_model(temp_nifti_path, model, device, CONFIG)
         else:
-            logging.warning(
-                "  -> Inference je zapnuta, ale není k dispozici žádný model ani ensemble. Přeskakuji."
-            )
+            logging.warning("  -> Inference active but no model available. Skipping.")
     else:
-        logging.info("  -> Modul inference deaktivován, maska bude ignorována.")
+        logging.info("  -> Inference module deactivated.")
 
-    # 5/6. POSTPROCESSING A INVERZNÍ TRANSFORMACE
+    # 5. Post-processing and Inverse transforms
     if mask_arr is not None:
-        logging.info("  -> Vykonávám zadaný post-processing.")
+        logging.info("  -> Applying post-processing.")
         mask_arr = postprocess_mask(mask_arr, CONFIG["post_proc_classes"])
 
         if is_flipped:
-            logging.info("  -> Inverzní transformace zrcadlení masky zpět na Pravou.")
+            logging.info("  -> Flipping mask back to Right knee space.")
             mask_arr = np.flip(mask_arr, axis=0)
 
-        # Uložení masky (do spacingu a orientace po převedení)
-        # Načteme fyzicky uložený originální reorientovaný file PŘED canonizací (pokud se zrcadlilo, použijeme re-written spacing. Zrcadlení přes SimpleITK nezměnilo metadata).
-        # Takže do pracovního stavu natlačíme hrubou masku
         mask_sitk = sitk.GetImageFromArray(mask_arr.astype(np.uint8))
-
-        # Orientace a Spacing pochází z NIfTI souboru těsně před "Inverzní kanonizací".
-        # Ale pokud chceme resamplovat do ORIGINÁLNÍHO OBJEMU (před resamplováním a před kanonizací), musíme resamplovat k `orig_sitk`
-        logging.info(
-            "  -> Zpětný resampling masky do prostoru a rozlišení původních vstupních dat."
-        )
-
-        # Nejdřív namapovat fyzické informace zpracovaného obrazu (Z bodu 2/3 bez FLIPU)
-        # Trik: Pokud se dělal flip u raw dat, temp_nifti_path má teď flip. Ale metadata to neovlivnilo orientačně,
-        # SimpleITK má direction a origin stejný i po np.flip(., axis=0). Zpětný flip v array stačí.
-
         meta_sitk = sitk.ReadImage(temp_nifti_path)
         mask_sitk.CopyInformation(meta_sitk)
 
+        # Resample mask back to original space
+        logging.info("  -> Resampling mask back to original input space.")
         resampler = sitk.ResampleImageFilter()
         resampler.SetReferenceImage(orig_sitk)
-        resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # maska = NN
+        resampler.SetInterpolator(sitk.sitkNearestNeighbor)
         resampler.SetDefaultPixelValue(0)
 
         final_mask_sitk = resampler.Execute(mask_sitk)
         sitk.WriteImage(final_mask_sitk, final_mask_path)
-        logging.info(f"  -> Výstupní maska uložena do: {final_mask_path}")
+        logging.info(f"  -> Final mask saved to: {final_mask_path}")
 
-    # 7. ANATOMICKÁ ANALÝZA (Anaknee)
+    # 6. Anatomical Analysis (Anaknee)
     if CONFIG["run_anatomical_analysis"]:
-        logging.info("  -> Spouštím Anaknee pipeline.")
-
+        logging.info("  -> Running Anaknee pipeline.")
         try:
-            # Original raw (without resampling!) + corresponding original space mask
             ref_path = CONFIG["anaknee_ref_mri"]
             res_dict, mask_array_ana, spacing_zyx, f_cent, t_cent, p_info = (
                 run_analysis(file_path, ref_path, final_mask_path)
             )
 
-            # CSV appending
-            df = pd.DataFrame([res_dict])
-            csv_path = os.path.join(CONFIG["output_dir"], "anaknee_results.csv")
-            header = not os.path.exists(csv_path)
-            df.to_csv(csv_path, mode="a", header=header, index=False)
+            # The result is returned and saved into patient_results.csv by the caller.
 
-            # Pokud voláme jeden soubor, nebo je vynuceno, pustíme pyvistu (pozor, blokující prvek)
             if run_viz_at_end:
                 vis_data = {
                     "femoral_centroid": f_cent,
@@ -623,46 +559,38 @@ def process_single_volume(
                     "att_info": p_info.get("att_info", {}),
                     "staubli_info": p_info.get("staubli_info", {}),
                 }
-                logging.info("  -> Vyvolávám grafické okno PyVista.")
+                logging.info("  -> Launching PyVista visualization.")
                 visualize_results(mask_array_ana, spacing_zyx, vis_data)
 
         except Exception as e:
-            logging.error(f"Při Anaknee analýze došlo k problému: {e}")
+            logging.error(f"Anaknee analysis failed: {e}")
             traceback.print_exc()
 
-    # 8. ÚKLID DOČASNÝCH SOUBORŮ
+    # 7. Cleanup temp files
     if os.path.exists(temp_nifti_path):
         try:
             os.remove(temp_nifti_path)
-            logging.info(
-                f"  -> Smazán dočasný soubor: {os.path.basename(temp_nifti_path)}"
-            )
+            logging.info(f"  -> Removed temp file: {os.path.basename(temp_nifti_path)}")
         except Exception as e:
-            logging.warning(
-                f"  -> Nepodařilo se smazat dočasný soubor {temp_nifti_path}: {e}"
-            )
+            logging.warning(f"  -> Could not remove temp file {temp_nifti_path}: {e}")
+            
+    if "res_dict" in locals():
+        res_dict["Filename"] = os.path.basename(file_path)
+        return res_dict
+    return None
 
 
 def _load_ensemble_models(config, device):
-    """
-    Načte všechny fold modely ze složky ensemble_dir podle vzoru ensemble_pattern.
-    Vrací list modelů připravených k inference (eval mode, na device).
-    """
+    """Loads fold checkpoints for ensemble inference."""
     fold_weight_paths = sorted(
         glob.glob(os.path.join(config["ensemble_dir"], config["ensemble_pattern"]))
     )
 
     if not fold_weight_paths:
-        logging.error(
-            f"Ensemble: nenalezeny žádné váhy ve složce '{config['ensemble_dir']}' "
-            f"se vzorem '{config['ensemble_pattern']}'."
-        )
+        logging.error(f"Ensemble: No checkpoints found in '{config['ensemble_dir']}'.")
         return []
 
-    logging.info(f"Ensemble: nalezeno {len(fold_weight_paths)} foldů:")
-    for p in fold_weight_paths:
-        logging.info(f"  - {os.path.basename(p)}")
-
+    logging.info(f"Ensemble: Found {len(fold_weight_paths)} models.")
     loaded_models = []
     for weight_path in fold_weight_paths:
         try:
@@ -672,37 +600,55 @@ def _load_ensemble_models(config, device):
             m.to(device)
             m.eval()
             loaded_models.append(m)
-            logging.info(f"  -> Načten fold model: {os.path.basename(weight_path)}")
+            logging.info(f"  -> Loaded fold checkpoint: {os.path.basename(weight_path)}")
         except Exception as e:
-            logging.error(f"  -> Nelze načíst fold model {weight_path}: {e}")
+            logging.error(f"  -> Could not load checkpoint {weight_path}: {e}")
 
     return loaded_models
 
 
+def run_visualization_only(img_path, ref_path, mask_path):
+    """Quick analysis + PyVista 3D viewer (no CSV logging)."""
+    from anaknee.main_acl_analysis import run_analysis
+    from anaknee.visualizator_analyzator import visualize_results
+    try:
+        logging.info(f"Preparing 3D visualization for: {os.path.basename(img_path)}")
+        res_dict, mask_array_ana, spacing_zyx, f_cent, t_cent, p_info = run_analysis(
+            img_path, ref_path, mask_path
+        )
+        vis_data = {
+            "femoral_centroid": f_cent,
+            "tibial_centroid": t_cent,
+            "plateau_normal": p_info["normal"],
+            "plateau_center": p_info["center"],
+            "bh_grid_info": p_info.get("bh_grid_info", {}),
+            "att_info": p_info.get("att_info", {}),
+            "staubli_info": p_info.get("staubli_info", {}),
+        }
+        visualize_results(mask_array_ana, spacing_zyx, vis_data)
+    except Exception as e:
+        logging.error(f"Could not open 3D visualization: {e}")
+        traceback.print_exc()
+
+
 def main():
     setup_logging(CONFIG["output_dir"], CONFIG["log_file"])
-    logging.info("==== SPOUŠTÍM ZPRACOVÁNÍ ====")
+    logging.info("==== START PIPELINE RUN ====")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Používám zařízení: {device}")
+    logging.info(f"Using device: {device}")
 
-    # Lateralita se nyní klasifikuje regex z názvu souboru (classify_laterality)
-
-    # --- Inicializace modelů ---
-    model = None  # Single model (fallback)
-    ensemble_models = []  # Ensemble modelů (5 foldů)
+    model = None
+    ensemble_models = []
 
     if CONFIG["run_inference"]:
         if CONFIG.get("use_ensemble", False):
-            logging.info("Ensemble mód: načítám váhy ze všech foldů...")
+            logging.info("Ensemble mode: loading checkpoints...")
             ensemble_models = _load_ensemble_models(CONFIG, device)
             if not ensemble_models:
-                logging.error(
-                    "Ensemble selhal – žádné modely nebyly načteny. Zkouším single model jako zálohu."
-                )
-                CONFIG["use_ensemble"] = False  # Automatický fallback
+                logging.error("Ensemble load failed. Falling back to single model.")
+                CONFIG["use_ensemble"] = False
 
-        # Single model jako záloha (nebo primář, pokud ensemble je vypnut)
         if not CONFIG.get("use_ensemble", False):
             try:
                 model = LightUNet3D(in_ch=1, out_ch=4, base=CONFIG["base_filters"])
@@ -711,16 +657,12 @@ def main():
                         torch.load(CONFIG["model_ckpt"], map_location=device)
                     )
                     model.to(device)
-                    logging.info(
-                        f"Načten single model Blackwell z: {CONFIG['model_ckpt']}"
-                    )
+                    logging.info(f"Loaded single model checkpoint: {CONFIG['model_ckpt']}")
                 else:
-                    logging.warning(
-                        f"Váhy nenalezeny v {CONFIG['model_ckpt']} – inference bude přeskočena."
-                    )
+                    logging.warning(f"Checkpoint not found at: {CONFIG['model_ckpt']}. Skipping inference.")
                     model = None
             except Exception as e:
-                logging.error(f"Single model Blackwell nelze inicializovat/načíst: {e}")
+                logging.error(f"Could not load single model: {e}")
                 model = None
 
     if CONFIG["mode"] == "FILE":
@@ -734,13 +676,13 @@ def main():
                 ensemble_models=ensemble_models,
             )
         except Exception as e:
-            logging.error(f"Fatální chyba při zpracování: {e}")
+            logging.error(f"Pipeline error: {e}")
             traceback.print_exc()
 
     elif CONFIG["mode"] == "FOLDER":
         search_path = os.path.join(CONFIG["input_dir"], "*.nii*")
         files = glob.glob(search_path)
-        logging.info(f"Mód Složky nalezen s počtem souborů: {len(files)}")
+        logging.info(f"Folder mode found {len(files)} files.")
 
         for f in files:
             try:
@@ -752,11 +694,9 @@ def main():
                     ensemble_models=ensemble_models,
                 )
             except Exception as e:
-                logging.error(f"Chyba ve složkovém módu pro soubor {f}: {e}")
-                logging.info("Pokračujeme k dalšímu pacientovi...")
+                logging.error(f"Pipeline error on file {f}: {e}")
                 traceback.print_exc()
 
-        # Segmentační analýza se pro složkové řešení pouští nakonec pro celou batch
         if CONFIG["run_segmentation_analysis"]:
             perform_segmentation_analysis(CONFIG["output_dir"], CONFIG["gt_masks_dir"])
 

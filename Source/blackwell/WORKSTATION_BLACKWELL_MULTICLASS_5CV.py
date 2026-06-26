@@ -27,9 +27,7 @@ from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.misc import set_determinism
 from torch.amp import autocast
 
-# ----------------------------------------------------
-# Globální nastavení pro Testování kódu
-# ----------------------------------------------------
+# Global configuration
 TEST_MODE = False 
 
 def set_seed(seed=42):
@@ -37,14 +35,11 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     set_determinism(seed=seed)
-    # Benchmark True zapne hledání nejrychlejších konvolucí
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
 
 
-# ----------------------------------------------------
-# Architektura 3D U-Net multiclass (ch_out=4)
-# ----------------------------------------------------
+# 3D U-Net multiclass architecture (ch_out=4)
 class ResBlock(nn.Module):
     def __init__(self, in_c, out_c):
         super().__init__()
@@ -96,24 +91,18 @@ class LightUNet3D(nn.Module):
         return self.final(d1)
 
 
-# ----------------------------------------------------
-# Loss Funkce s Absolutní Penalizací ACL
-# ----------------------------------------------------
+# Loss function
 class WeightedDiceCELoss(nn.Module):
     def __init__(self, weights):
         super().__init__()
-        # DiceLoss řeší překrytí tvarů objemů, Background je ignorován (false).
         self.dice = DiceLoss(to_onehot_y=True, softmax=True, squared_pred=True, include_background=False)
-       
         self.ce = nn.CrossEntropyLoss(weight=weights)
         
     def forward(self, inputs, targets):
         return self.dice(inputs, targets) + self.ce(inputs, targets.squeeze(1).long())
 
 
-# ----------------------------------------------------
-# Augmentace a předzpracování (MONAI)
-# ----------------------------------------------------
+# Preprocessing and augmentation
 def get_transforms(mode, patch_size):
     base_transforms = [
         LoadImaged(keys=["image", "label"]),
@@ -135,9 +124,7 @@ def get_transforms(mode, patch_size):
     return Compose(base_transforms + [NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True)])
 
 
-# ----------------------------------------------------
-# Vizualizační funkce
-# ----------------------------------------------------
+# Visualization helper functions
 def plot_learning_curves(csv_path, save_dir, fold_idx):
     if not os.path.exists(csv_path): return
     df = pd.read_csv(csv_path)
@@ -145,10 +132,7 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     
     train_epochs = df['Epoch'].dropna()
     train_loss = df['Train_Loss'].dropna()
-    if 'Learning_Rate' in df.columns:
-        learning_rate = df['Learning_Rate'].dropna()
-    else:
-        learning_rate = []
+    learning_rate = df['Learning_Rate'].dropna() if 'Learning_Rate' in df.columns else []
 
     val_df = df.dropna(subset=['Val_Loss'])
     val_epochs = val_df['Epoch']
@@ -157,51 +141,51 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.figure(figsize=(18, 12))
     sns.set_theme(style="whitegrid")
     
-    # 1. Graf: Ztrátová funkce (Loss)
+    # 1. Loss Curve
     plt.subplot(2, 2, 1)
-    sns.lineplot(x=train_epochs, y=train_loss, label="Trénovací ztráta", linewidth=2.5, color='royalblue')
+    sns.lineplot(x=train_epochs, y=train_loss, label="Train Loss", linewidth=2.5, color='royalblue')
     if len(val_epochs) > 0:
-        sns.lineplot(x=val_epochs, y=val_loss, label="Validační ztráta", linewidth=2.5, marker="o", markersize=6, color='crimson')
-    plt.title(f"Vývoj ztrátové funkce - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
-    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
-    plt.ylabel("Hodnota ztráty", fontsize=12, fontweight='bold')
+        sns.lineplot(x=val_epochs, y=val_loss, label="Val Loss", linewidth=2.5, marker="o", markersize=6, color='crimson')
+    plt.title(f"Loss - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epoch", fontsize=12, fontweight='bold')
+    plt.ylabel("Loss", fontsize=12, fontweight='bold')
     plt.tick_params(labelsize=10)
     plt.legend(fontsize=10, loc='upper right')
     
-    # 2. Graf: Dice Skóre
+    # 2. Dice Curve
     plt.subplot(2, 2, 2)
     if len(val_epochs) > 0 and 'Val_Dice_ACL' in val_df.columns:
         sns.lineplot(x=val_epochs, y=val_df['Mean_Dice'], label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj validačního Dice skóre - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
-    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
-    plt.ylabel("Dice skóre", fontsize=12, fontweight='bold')
+    plt.title(f"Val Dice - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epoch", fontsize=12, fontweight='bold')
+    plt.ylabel("Dice", fontsize=12, fontweight='bold')
     plt.ylim(0, 1)
     plt.tick_params(labelsize=10)
     plt.legend(fontsize=10, loc='lower right')
 
-    # 3. Graf: HD95 Metric
+    # 3. HD95 Curve
     plt.subplot(2, 2, 3)
     if len(val_epochs) > 0 and 'Val_HD95_ACL' in val_df.columns:
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_ACL'], label="ACL HD95", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Femur'], label="Femur HD95", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Tibia'], label="Tibia HD95", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj Hausdorffovy vzdálenosti (HD95) - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
-    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
-    plt.ylabel("HD95 [mm] (Nižší je lepší)", fontsize=12, fontweight='bold')
+    plt.title(f"Val HD95 - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epoch", fontsize=12, fontweight='bold')
+    plt.ylabel("HD95 [mm]", fontsize=12, fontweight='bold')
     plt.yscale('log')
     plt.tick_params(labelsize=10)
     plt.legend(fontsize=10, loc='upper right')
 
-    # 4. Graf: Learning Rate
+    # 4. Learning Rate Curve
     plt.subplot(2, 2, 4)
     if len(learning_rate) > 0:
         sns.lineplot(x=train_epochs, y=learning_rate, label="Learning Rate", color='purple', linewidth=2.5)
-    plt.title(f"Vývoj Learning Rate - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
-    plt.xlabel("Epocha", fontsize=12, fontweight='bold')
-    plt.ylabel("Learning Rate", fontsize=12, fontweight='bold')
+    plt.title(f"Learning Rate - Fold {fold_idx}", fontsize=16, fontweight='bold', pad=10)
+    plt.xlabel("Epoch", fontsize=12, fontweight='bold')
+    plt.ylabel("LR", fontsize=12, fontweight='bold')
     plt.yscale('log')
     plt.tick_params(labelsize=10)
     plt.legend(fontsize=10, loc='upper right')
@@ -211,18 +195,15 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.savefig(os.path.join(save_dir, f"learning_curve_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # ==========================================
-    # Uložení jednotlivých grafů zvlášť do PDF
-    # ==========================================
-    
-    # 1. Ztrátová funkce (Loss)
+    # Save separate plots in PDF
+    # Loss Plot
     plt.figure(figsize=(10, 6))
-    sns.lineplot(x=train_epochs, y=train_loss, label="Trénovací ztráta", linewidth=2.5, color='royalblue')
+    sns.lineplot(x=train_epochs, y=train_loss, label="Train Loss", linewidth=2.5, color='royalblue')
     if len(val_epochs) > 0:
-        sns.lineplot(x=val_epochs, y=val_loss, label="Validační ztráta", linewidth=2.5, marker="o", markersize=6, color='crimson')
-    plt.title(f"Vývoj ztrátové funkce - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-    plt.ylabel("Hodnota ztráty", fontsize=14, fontweight='bold')
+        sns.lineplot(x=val_epochs, y=val_loss, label="Val Loss", linewidth=2.5, marker="o", markersize=6, color='crimson')
+    plt.title(f"Loss - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epoch", fontsize=14, fontweight='bold')
+    plt.ylabel("Loss", fontsize=14, fontweight='bold')
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='upper right')
     plt.tight_layout()
@@ -230,16 +211,16 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.savefig(os.path.join(save_dir, f"learning_curve_loss_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # 2. Dice Skóre
+    # Dice Plot
     plt.figure(figsize=(10, 6))
     if len(val_epochs) > 0 and 'Val_Dice_ACL' in val_df.columns:
         sns.lineplot(x=val_epochs, y=val_df['Mean_Dice'], label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_ACL'], label="ACL Dice", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Femur'], label="Femur Dice", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_Dice_Tibia'], label="Tibia Dice", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj validačního Dice skóre - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-    plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+    plt.title(f"Val Dice - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epoch", fontsize=14, fontweight='bold')
+    plt.ylabel("Dice", fontsize=14, fontweight='bold')
     plt.ylim(0, 1)
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='lower right')
@@ -248,15 +229,15 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.savefig(os.path.join(save_dir, f"learning_curve_dice_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # 3. HD95 Metric
+    # HD95 Plot
     plt.figure(figsize=(10, 6))
     if len(val_epochs) > 0 and 'Val_HD95_ACL' in val_df.columns:
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_ACL'], label="ACL HD95", color='forestgreen', linewidth=2.5, marker="s", markersize=6)
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Femur'], label="Femur HD95", color='orange', linewidth=2.0)
         sns.lineplot(x=val_epochs, y=val_df['Val_HD95_Tibia'], label="Tibia HD95", color='dodgerblue', linewidth=2.0)
-    plt.title(f"Vývoj validační Hausdorffovy vzdálenosti (HD95) - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-    plt.ylabel("HD95 [mm] (Nižší je lepší)", fontsize=14, fontweight='bold')
+    plt.title(f"Val HD95 - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epoch", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm]", fontsize=14, fontweight='bold')
     plt.yscale('log')
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='upper right')
@@ -265,13 +246,13 @@ def plot_learning_curves(csv_path, save_dir, fold_idx):
     plt.savefig(os.path.join(save_dir, f"learning_curve_hd95_fold_{fold_idx}.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # 4. Learning Rate
+    # LR Plot
     if len(learning_rate) > 0:
         plt.figure(figsize=(10, 6))
         sns.lineplot(x=train_epochs, y=learning_rate, label="Learning Rate", color='purple', linewidth=2.5)
-        plt.title(f"Vývoj Learning Rate - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
-        plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-        plt.ylabel("Learning Rate", fontsize=14, fontweight='bold')
+        plt.title(f"Learning Rate - Fold {fold_idx}", fontsize=18, fontweight='bold', pad=15)
+        plt.xlabel("Epoch", fontsize=14, fontweight='bold')
+        plt.ylabel("LR", fontsize=14, fontweight='bold')
         plt.yscale('log')
         plt.tick_params(labelsize=12)
         plt.legend(fontsize=12, loc='upper right')
@@ -286,38 +267,38 @@ def plot_global_cv_results(csv_path, save_dir):
     df = pd.read_csv(csv_path)
     if df.empty: return
 
-    # 1. Klasický Boxplot
+    # 1. Boxplot
     plt.figure(figsize=(18, 8))
     sns.set_theme(style="whitegrid")
     plt.subplot(1, 2, 1)
     sns.boxplot(data=df, x="Fold", y="Dice", hue="Struktura", palette="tab10", linewidth=1.5)
-    plt.title("Křížová validace: 4-Class Testovací Dice", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Testovaný Fold", fontsize=14, fontweight='bold')
-    plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+    plt.title("CV: Test Dice", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Test Fold", fontsize=14, fontweight='bold')
+    plt.ylabel("Dice", fontsize=14, fontweight='bold')
     plt.ylim(0.0, 1.0)
     plt.tick_params(labelsize=12)
-    plt.legend(title="Orgán", fontsize=10)
+    plt.legend(title="Structure", fontsize=10)
     
     plt.subplot(1, 2, 2)
     sns.boxplot(data=df, x="Fold", y="HD95 [mm]", hue="Struktura", palette="tab10", linewidth=1.5)
-    plt.title("Křížová validace: Testovací HD95 (Nižší je lepší)", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Testovaný Fold", fontsize=14, fontweight='bold')
-    plt.ylabel("Hausdorffova vzdálenost 95% [mm]", fontsize=14, fontweight='bold')
+    plt.title("CV: Test HD95", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Test Fold", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm]", fontsize=14, fontweight='bold')
     plt.yscale('log')
     plt.tick_params(labelsize=12)
-    plt.legend(title="Orgán", fontsize=10)
+    plt.legend(title="Structure", fontsize=10)
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, "global_cv_boxplot.png"), dpi=200, bbox_inches='tight')
     plt.savefig(os.path.join(save_dir, "global_cv_boxplot.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # 2. Violin Plot + Swarm Plot (Hustota distribuce)
+    # 2. Violin Plot + Swarm Plot
     plt.figure(figsize=(14, 8))
     sns.violinplot(data=df, x="Struktura", y="Dice", inner=None, color=".8", linewidth=0)
     sns.swarmplot(data=df, x="Struktura", y="Dice", hue="Fold", palette="Set2", size=6, alpha=0.8)
-    plt.title("Hustota distribuce Dice skóre (Violin + Swarm plot)", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Struktura", fontsize=14, fontweight='bold')
-    plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+    plt.title("Dice Distribution (Violin + Swarm)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Structure", fontsize=14, fontweight='bold')
+    plt.ylabel("Dice", fontsize=14, fontweight='bold')
     plt.ylim(0.0, 1.0)
     plt.legend(title="Fold", bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
@@ -328,9 +309,9 @@ def plot_global_cv_results(csv_path, save_dir):
     plt.figure(figsize=(14, 8))
     sns.violinplot(data=df, x="Struktura", y="HD95 [mm]", inner=None, color=".8", linewidth=0)
     sns.swarmplot(data=df, x="Struktura", y="HD95 [mm]", hue="Fold", palette="Set2", size=6, alpha=0.8)
-    plt.title("Hustota distribuce HD95 (Violin + Swarm plot)", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Struktura", fontsize=14, fontweight='bold')
-    plt.ylabel("HD95 [mm] (Log scale)", fontsize=14, fontweight='bold')
+    plt.title("HD95 Distribution (Violin + Swarm)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Structure", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm]", fontsize=14, fontweight='bold')
     plt.yscale('log')
     plt.legend(title="Fold", bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
@@ -338,12 +319,12 @@ def plot_global_cv_results(csv_path, save_dir):
     plt.savefig(os.path.join(save_dir, "global_cv_violin_hd95.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # 3. Scatter Plot (Dice vs HD95)
+    # 3. Scatter Plot
     plt.figure(figsize=(12, 8))
     sns.scatterplot(data=df, x="Dice", y="HD95 [mm]", hue="Struktura", style="Fold", palette="tab10", s=150, alpha=0.7)
-    plt.title("Scatter Plot: Přesnost (Dice) vs Odlehlé chyby (HD95)", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Dice skóre (Vyšší je lepší)", fontsize=14, fontweight='bold')
-    plt.ylabel("HD95 [mm] (Nižší je lepší, Log scale)", fontsize=14, fontweight='bold')
+    plt.title("Dice vs HD95 Scatter", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Dice", fontsize=14, fontweight='bold')
+    plt.ylabel("HD95 [mm]", fontsize=14, fontweight='bold')
     plt.xlim(0.0, 1.0)
     plt.yscale('log')
     plt.grid(True, which="both", ls="--", alpha=0.5)
@@ -358,9 +339,9 @@ def plot_global_cv_results(csv_path, save_dir):
         plt.figure(figsize=(10, 6))
         sns.boxplot(data=df, x="Fold", y="Inference_Time_s", color="lightgray", width=0.5)
         sns.stripplot(data=df, x="Fold", y="Inference_Time_s", color="red", alpha=0.6, jitter=True, size=8)
-        plt.title("Analýza času inference 3D obrazu", fontsize=18, fontweight='bold', pad=15)
-        plt.xlabel("Testovaný Fold", fontsize=14, fontweight='bold')
-        plt.ylabel("Čas inference [s]", fontsize=14, fontweight='bold')
+        plt.title("Inference Time Analysis", fontsize=18, fontweight='bold', pad=15)
+        plt.xlabel("Fold", fontsize=14, fontweight='bold')
+        plt.ylabel("Time [s]", fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.savefig(os.path.join(save_dir, "global_cv_inference_time.png"), dpi=200, bbox_inches='tight')
         plt.savefig(os.path.join(save_dir, "global_cv_inference_time.pdf"), format='pdf', bbox_inches='tight')
@@ -379,14 +360,14 @@ def plot_global_learning_curves(run_dir, num_folds, save_dir):
     combined_df = pd.concat(all_dfs, ignore_index=True)
     val_df = combined_df.dropna(subset=['Val_Loss'])
     
-    # 1. Průměrná Ztrátová funkce (Loss)
+    # 1. Average Loss
     plt.figure(figsize=(10, 6))
-    sns.lineplot(data=combined_df, x="Epoch", y="Train_Loss", label="Trénovací ztráta", linewidth=2.5, color='royalblue')
+    sns.lineplot(data=combined_df, x="Epoch", y="Train_Loss", label="Train Loss", linewidth=2.5, color='royalblue')
     if not val_df.empty:
-        sns.lineplot(data=val_df, x="Epoch", y="Val_Loss", label="Validační ztráta", linewidth=2.5, marker="o", markersize=6, color='crimson')
-    plt.title("Globální vývoj ztrátové funkce (všechny foldy)", fontsize=18, fontweight='bold', pad=15)
-    plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-    plt.ylabel("Hodnota ztráty", fontsize=14, fontweight='bold')
+        sns.lineplot(data=val_df, x="Epoch", y="Val_Loss", label="Val Loss", linewidth=2.5, marker="o", markersize=6, color='crimson')
+    plt.title("Global Loss (all folds)", fontsize=18, fontweight='bold', pad=15)
+    plt.xlabel("Epoch", fontsize=14, fontweight='bold')
+    plt.ylabel("Loss", fontsize=14, fontweight='bold')
     plt.tick_params(labelsize=12)
     plt.legend(fontsize=12, loc='upper right')
     plt.tight_layout()
@@ -394,16 +375,16 @@ def plot_global_learning_curves(run_dir, num_folds, save_dir):
     plt.savefig(os.path.join(save_dir, "global_learning_curve_loss.pdf"), format='pdf', bbox_inches='tight')
     plt.close()
 
-    # 2. Průměrné Dice skóre
+    # 2. Average Dice
     if not val_df.empty and 'Val_Dice_ACL' in val_df.columns:
         plt.figure(figsize=(10, 6))
         sns.lineplot(data=val_df, x="Epoch", y="Mean_Dice", label="MEAN Dice", color='black', linewidth=3.0, linestyle="--")
         sns.lineplot(data=val_df, x="Epoch", y="Val_Dice_ACL", label="ACL Dice", color='forestgreen', linewidth=2.5)
         sns.lineplot(data=val_df, x="Epoch", y="Val_Dice_Femur", label="Femur Dice", color='orange', linewidth=2.0)
         sns.lineplot(data=val_df, x="Epoch", y="Val_Dice_Tibia", label="Tibia Dice", color='dodgerblue', linewidth=2.0)
-        plt.title("Globální vývoj Dice skóre ze všech foldů", fontsize=18, fontweight='bold', pad=15)
-        plt.xlabel("Epocha", fontsize=14, fontweight='bold')
-        plt.ylabel("Dice skóre", fontsize=14, fontweight='bold')
+        plt.title("Global Dice (all folds)", fontsize=18, fontweight='bold', pad=15)
+        plt.xlabel("Epoch", fontsize=14, fontweight='bold')
+        plt.ylabel("Dice", fontsize=14, fontweight='bold')
         plt.ylim(0, 1)
         plt.tick_params(labelsize=12)
         plt.legend(fontsize=12, loc='lower right')
@@ -413,11 +394,9 @@ def plot_global_learning_curves(run_dir, num_folds, save_dir):
         plt.close()
 
 
-# ----------------------------------------------------
-# Fáze Evaluace Testovacích dat po Foldu
-# ----------------------------------------------------
+# Test evaluation phase
 def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device, global_csv_path):
-    print(f"\n[Testovací Fáze] Vyhodnocování nejlepšího modelu foldu {fold_idx}")
+    print(f"\n[Test Phase] Evaluating best model for fold {fold_idx}")
     model = LightUNet3D(in_ch=1, out_ch=4, base=config['base_filters'], dropout_rate=config['dropout'])
     model.load_state_dict(torch.load(best_model_path))
     if torch.cuda.device_count() > 1: model = nn.DataParallel(model)
@@ -449,7 +428,7 @@ def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device
             dice_metric(y_pred=val_outputs_converted, y=val_labels_converted)
             hd95_metric(y_pred=val_outputs_converted, y=val_labels_converted)
 
-            dice = dice_metric.get_buffer()[-1]     # tensor tvaru [3] pro tridu 1,2,3
+            dice = dice_metric.get_buffer()[-1]
             hd95 = hd95_metric.get_buffer()[-1]
             
             file_name = os.path.basename(val_files[i]['image'])
@@ -475,21 +454,18 @@ def test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device
             writer.writeheader()
         writer.writerows(results)
     
-    print(f"Hotovo. Výsledky per-class testovací sady uloženy do {global_csv_path}.")
+    print(f"Results saved to {global_csv_path}.")
 
-    # Uvolnění VRAM po testování
     del model
     torch.cuda.empty_cache()
     import gc
     gc.collect()
 
 
-# ----------------------------------------------------
-# Hlavní Trénovací smyčka Foldu
-# ----------------------------------------------------
+# Training loop per fold
 def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_path):
     print(f"\n=========================================")
-    print(f"--- Začíná Fold {fold_idx} ---")
+    print(f"--- Starting Fold {fold_idx} ---")
     print(f"=========================================")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -505,11 +481,10 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
     model = LightUNet3D(in_ch=1, out_ch=4, base=config['base_filters'], dropout_rate=config['dropout'])
 
     if torch.cuda.device_count() > 1:
-        print(f"Detekováno {torch.cuda.device_count()} Aktivuji DataParallel.")
+        print(f"Detected {torch.cuda.device_count()} GPUs. Using DataParallel.")
         model = nn.DataParallel(model)
     model = model.to(device)
 
-    
     class_weights = torch.tensor([0.1, 2.9925236028121227, 1.0, 1.0], dtype=torch.float32, device=device)
     loss_function = WeightedDiceCELoss(class_weights)
     
@@ -586,7 +561,6 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
             val_loss = val_loss_sum / len(val_loader)
             avg_inf_time = round(np.mean(inf_times), 3)
 
-            # Extrakce Multi-class hodnot (Tensor delky 3 -> 0:ACL, 1:Fem, 2:Tib)
             val_metric_batch = dice_metric.aggregate()
             v_d_acl = val_metric_batch[0].item() if not torch.isnan(val_metric_batch[0]) else 0.0
             v_d_fem = val_metric_batch[1].item() if not torch.isnan(val_metric_batch[1]) else 0.0
@@ -604,8 +578,6 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
             dice_metric.reset(); hd95_metric.reset()
 
             print(f"Ep {epoch + 1} | MEAN_DICE: {mean_dice:.4f} [ACL: {v_d_acl:.4f}, Fem: {v_d_fem:.4f}, Tib: {v_d_tib:.4f}] | Val_Loss: {val_loss:.4f}")
-            
-            # UKLÁDACÍ KRITÉRIUM EXKLUZIVNĚ NA ÚSPĚCH ACL
             scheduler.step(v_d_acl)
 
             if v_d_acl > best_metric:
@@ -625,14 +597,13 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
             plot_learning_curves(csv_path, run_dir, fold_idx)
 
         if patience_counter >= config['patience']:
-            print(f"--- Early stopping u foldu {fold_idx} po nedostatku zlepšení u ACL po {patience_counter} epochách. ---")
+            print(f"--- Early stopping fold {fold_idx} after {patience_counter} validation periods without ACL improvement. ---")
             break
 
-    print(f"Trénink Foldu {fold_idx} dokončen s nejlepším validačním skóre ACL: {best_metric:.4f}")
+    print(f"Fold {fold_idx} training complete. Best ACL Dice: {best_metric:.4f}")
     if os.path.exists(best_model_path):
         test_best_model_on_fold(best_model_path, config, val_files, fold_idx, device, global_cv_csv_path)
 
-    
     del model
     del optimizer
     del train_loader
@@ -644,9 +615,6 @@ def train_fold(config, train_files, val_files, fold_idx, run_dir, global_cv_csv_
     return best_metric
 
 
-# ----------------------------------------------------
-# Main
-# ----------------------------------------------------
 def main():
     multiprocessing.freeze_support()
     set_seed(42)
@@ -654,8 +622,8 @@ def main():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
-    train_img_dir = r"A:\DATA_optimalizace\images_hpo"
-    train_mask_dir = r"A:\DATA_optimalizace\labels_hpo"
+    train_img_dir = r""
+    train_mask_dir = r""
     base_save_dir = 'results_blackwell_cv'
     os.makedirs(base_save_dir, exist_ok=True)
     global_cv_csv_path = os.path.join(base_save_dir, 'cv_individual_results.csv')
@@ -664,9 +632,8 @@ def main():
     all_masks = np.array(sorted(glob.glob(os.path.join(train_mask_dir, "*.nii*"))))
 
     if len(all_imgs) == 0:
-        raise RuntimeError("Data nenalezena zákl. cestě.")
+        raise RuntimeError("No data found.")
 
-    # Config
     if TEST_MODE:
         all_imgs = all_imgs[:4]
         all_masks = all_masks[:4]
@@ -687,10 +654,10 @@ def main():
             'base_filters': 64,              
             'lr': 0.00010052642570664155,
             'epochs': 1000,
-            'val_interval': 10,               # Kontrola každou 10. epochu
+            'val_interval': 10,               
             'batch_size': 16,                 
-            'patience': 15,                  # Early stop po: 15 kroků * 10 = 150 epoch bez zlepšení
-            'lr_patience': 8,               # Snížení rychlosti učení po: 8 kroků * 10 = 80 epoch
+            'patience': 15,                  
+            'lr_patience': 8,               
             'dropout': 0.1                  
         }
 
@@ -703,11 +670,10 @@ def main():
     kf = KFold(n_splits=5 if not TEST_MODE else 2, shuffle=True, random_state=42)
 
     START_FOLD = 0
-
     fold_metrics = []
+    
     for fold_idx, (train_idx, val_idx) in enumerate(kf.split(all_imgs)):
         fold_id = fold_idx + 1
-
         if fold_id < START_FOLD:
             continue
 
@@ -719,14 +685,14 @@ def main():
 
     avg_dice = np.mean(fold_metrics)
     print(f"\n=========================================")
-    print(f"TRÉNINK DOKONČEN. Průměrné nejlepší Dice čistě pro ACL ze všech foldů: {avg_dice:.4f}")
+    print(f"TRAINING COMPLETE. Average best ACL Dice: {avg_dice:.4f}")
     
     if os.path.exists(global_cv_csv_path):
-        print("Vykreslování finálních globálních grafů pro analýzu...")
+        print("Plotting final global results...")
         plot_global_cv_results(global_cv_csv_path, base_save_dir)
         num_folds_used = 5 if not TEST_MODE else 2
         plot_global_learning_curves(run_dir, num_folds_used, base_save_dir)
-        print("Všechny grafy úspěšně vygenerovány a uloženy.")
+        print("All plots generated and saved.")
 
 if __name__ == "__main__":
     main()

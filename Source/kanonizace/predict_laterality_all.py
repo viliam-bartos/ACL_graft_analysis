@@ -12,48 +12,38 @@ from monai.transforms import (
     EnsureType
 )
 
-# ==============================================================================
-# CONFIG PRO HROMADNOU INFERENCI
-# ==============================================================================
+# Batch inference configuration
 CONFIG = {
-    # Složka s NIfTI obrazy k predikci (uprav dle potřeby)
-    "images_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\images",
-    
-    # Výstupní CSV soubor kam se uloží predikce
-    "output_csv": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\predikce_train_full_laterality.csv",
-
-    # Cesta ke kontrolnímu bodu natrénovaného modelu
-    "model_ckpt": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\checkpoints\best_laterality_model.pth",
-    
-    # Velikost na kterou byl model trénován
+    "images_dir": r"",
+    "output_csv": r"",
+    "model_ckpt": r"",
     "spatial_size": (96, 96, 96)
 }
-# ==============================================================================
 
 class LateralityClassifier:
     def __init__(self, model_path=CONFIG["model_ckpt"], spatial_size=CONFIG["spatial_size"], device=None):
         self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Sestavení sítě se stejnou architekturou jako při tréninku
+        # Build network (same as training)
         self.model = resnet18(
             spatial_dims=3, 
             n_input_channels=1,
             num_classes=1,
-            norm=("instance", {"affine": True}) # Instance Norm
+            norm=("instance", {"affine": True})
         )
         
-        print(f"Načítám váhy modelu z: {model_path}")
+        print(f"Loading model weights from: {model_path}")
         if os.path.exists(model_path):
             state_dict = torch.load(model_path, map_location=self.device)
             self.model.load_state_dict(state_dict)
-            print("Váhy úspěšně načteny.")
+            print("Weights loaded successfully.")
         else:
-            raise FileNotFoundError(f"[CHYBA] Model nebyl nalezen na cestě: {model_path}.")
+            raise FileNotFoundError(f"[ERROR] Model not found at: {model_path}")
             
         self.model.to(self.device)
         self.model.eval()
         
-        # Transformace pro nediagnostické jednoruké načtení numpy arraye
+        # MONAI inference transforms
         self.transforms = Compose([
             LoadImage(image_only=True),
             EnsureChannelFirst(),
@@ -63,15 +53,15 @@ class LateralityClassifier:
         ])
 
     def predict(self, image_path):
-        """Provede predikci pro konkrétní NIfTI soubor a vrátí (text 'Left'/'Right', probability)."""
+        """Predicts the laterality ('Left' or 'Right') and probability for a NIfTI file."""
         input_tensor = self.transforms(image_path)
-        input_tensor = input_tensor.unsqueeze(0).to(self.device) # Zabalení do batche
+        input_tensor = input_tensor.unsqueeze(0).to(self.device) # Add batch dimension
         
         with torch.no_grad():
             output = self.model(input_tensor)
             prob = torch.sigmoid(output).item()
             
-        # Náš dataset měl Right=1.0, Left=0.0
+        # Class encoding: Right = 1.0, Left = 0.0
         predicted_class = "Right" if prob > 0.5 else "Left"
         return predicted_class, prob
 
@@ -81,7 +71,7 @@ def main():
     output_csv = CONFIG["output_csv"]
     
     if not os.path.isdir(images_dir):
-        print(f"[CHYBA] Zadaná složka s obrázky '{images_dir}' neexistuje.")
+        print(f"[ERROR] Images directory '{images_dir}' does not exist.")
         return
         
     try:
@@ -90,35 +80,32 @@ def main():
         print(e)
         return
     
-    # Získání seznamu NIfTI souborů
+    # Find all NIfTI files
     files = [f for f in os.listdir(images_dir) if f.endswith(".nii") or f.endswith(".nii.gz")]
     
     if not files:
-        print(f"[VAROVÁNÍ] Ve složce '{images_dir}' nebyly nalezeny žádné NIfTI soubory.")
+        print(f"[WARNING] No NIfTI files found in '{images_dir}'.")
         return
         
-    print(f"\nZačínám predikci pro {len(files)} snímků...")
+    print(f"\nStarting prediction for {len(files)} images...")
     
-    # Vytvoření složky pro výstupní CSV, pokud neexistuje
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     
     with open(output_csv, "w", newline="", encoding="utf-8") as csvfile:
         writer = csv.writer(csvfile)
-        # Zápis hlavičky
         writer.writerow(["ID", "Laterality", "Probability"]) 
         
-        # Iterace přes soubory s visualním progress barem
-        for file in tqdm(files, desc="Zpracovávám MRI objemy", unit="snímek"):
+        for file in tqdm(files, desc="Processing MRI volumes", unit="volume"):
             img_path = os.path.join(images_dir, file)
             try:
                 prediction, prob = classifier.predict(img_path)
                 writer.writerow([file, prediction, f"{prob:.4f}"])
-                csvfile.flush() # Okamžitý zápis na disk
+                csvfile.flush()
             except Exception as e:
-                print(f"\n[CHYBA] Selhala predikce pro {file}: {e}")
+                print(f"\n[ERROR] Prediction failed for {file}: {e}")
                 writer.writerow([file, "ERROR"])
                 
-    print(f"\nHOTOVO! Predikce byly úspěšně uloženy do:\n-> {output_csv}")
+    print(f"\nPredictions successfully saved to:\n-> {output_csv}")
 
 if __name__ == "__main__":
     main()
