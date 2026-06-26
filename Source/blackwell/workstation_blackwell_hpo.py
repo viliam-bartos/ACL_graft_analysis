@@ -25,9 +25,7 @@ from monai.metrics import DiceMetric
 from monai.utils.misc import set_determinism
 from torch.amp import autocast
 
-# ----------------------------------------------------
-# Globální nastavení
-# ----------------------------------------------------
+# Global setup
 def set_seed(seed=42):
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -36,9 +34,7 @@ def set_seed(seed=42):
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
 
-# ----------------------------------------------------
-# Architektura 3D U-Net multiclass
-# ----------------------------------------------------
+# 3D U-Net multiclass architecture
 class ResBlock(nn.Module):
     def __init__(self, in_c, out_c):
         super().__init__()
@@ -89,9 +85,7 @@ class LightUNet3D(nn.Module):
 
         return self.final(d1)
 
-# ----------------------------------------------------
-# Loss Funkce
-# ----------------------------------------------------
+# Loss function
 class WeightedDiceCELoss(nn.Module):
     def __init__(self, weights):
         super().__init__()
@@ -101,42 +95,30 @@ class WeightedDiceCELoss(nn.Module):
     def forward(self, inputs, targets):
         return self.dice(inputs, targets) + self.ce(inputs, targets.squeeze(1).long())
 
-# ----------------------------------------------------
-# Optuna Cíl
-# ----------------------------------------------------
+# Optuna objective function
 def objective(trial, cached_train_ds, cached_val_ds):
     print(f"\n=========================================")
-    print(f"--- Začíná Optuna Trial {trial.number} ---")
+    print(f"--- Starting Optuna Trial {trial.number} ---")
     print(f"=========================================")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # ------------------
-    # Definice Hyperparametrů
-    # ------------------
     config = {
         'patch_size': (128, 128, 64),
-        # Architektura a kapacita
         'base_filters': 64,
         'dropout': trial.suggest_float("dropout", 0.0, 0.3, step=0.1),
-        
-        # Optimalizace
         'lr': trial.suggest_float("lr", 5e-5, 1e-3, log=True),
         'acl_weight': trial.suggest_float("acl_weight", 2.0, 8.0),
-        
-        # Augmentace podle nejelšpího trialu z předchozího zkoušení
         'prob_affine': 0.2,
         'prob_elastic': 0.1,
         'prob_noise': 0.3,
         'prob_contrast': 0.3,
-        
-        # Pevné nastavení procesu
-        'batch_size': 16, ## vyzkouset víc
+        'batch_size': 16,
         'epochs': 150,
         'val_interval': 5,
     }
 
-    # Dynamické augmentace vytvořené specificky pro parametry tohoto Trialu
+    # Dynamic augmentations for this trial
     train_augmentations = Compose([
         RandCropByLabelClassesd(keys=["image", "label"], label_key="label", spatial_size=config['patch_size'], num_classes=4, ratios=[1, 2, 1, 1], num_samples=1),
         RandAffined(keys=["image", "label"], prob=config['prob_affine'], rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12), mode=("bilinear", "nearest"), padding_mode="zeros"),
@@ -147,15 +129,13 @@ def objective(trial, cached_train_ds, cached_val_ds):
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
     ])
 
-    # K zabránění zbytečného a drastického přepočítávání cache mezi experimenty 
-    # propojíme base dataset s dalšími vrstvami augmentací (rychlé)
     val_transforms = Compose([
         NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
     ])
     train_ds = Dataset(data=cached_train_ds, transform=train_augmentations)
     val_ds = Dataset(data=cached_val_ds, transform=val_transforms)
 
-    train_loader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0) # prefetch_factor=1
+    train_loader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, num_workers=0)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=0)
 
     model = LightUNet3D(in_ch=1, out_ch=4, base=config['base_filters'], dropout_rate=config['dropout'])
@@ -163,12 +143,12 @@ def objective(trial, cached_train_ds, cached_val_ds):
         model = nn.DataParallel(model)
     model = model.to(device)
 
-    # Natižení unikátní váhy pro ACL
+    # Class weights for ACL
     class_weights = torch.tensor([0.1, config['acl_weight'], 1.0, 1.0], dtype=torch.float32, device=device)
     loss_function = WeightedDiceCELoss(class_weights)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=6) # Rychlé snížení LR po 30 validačních epochách beze změny
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=6)
 
     dice_metric = DiceMetric(include_background=False, reduction="mean_batch")
     post_pred = AsDiscrete(argmax=True, to_onehot=4)
@@ -192,7 +172,7 @@ def objective(trial, cached_train_ds, cached_val_ds):
             optimizer.step()
             pbar.set_postfix({'loss': f"{loss.item():.4f}"})
 
-        # Validační krok
+        # Validation step
         if (epoch + 1) % config['val_interval'] == 0:
             model.eval()
             with torch.no_grad():
@@ -217,23 +197,19 @@ def objective(trial, cached_train_ds, cached_val_ds):
             
             if v_d_acl > best_metric:
                 best_metric = v_d_acl
-                
-                # Uložení vah aktuálně nejlepšího modelu pro tento trial
                 save_state = model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict()
                 torch.save(save_state, f"best_model_trial_{trial.number}.pth")
                 
-            # Report metric for dynamic pruning - Use Optuna to stop unpromising trials
+            # Report metric and prune if unpromising
             step = epoch // config['val_interval']
             trial.report(v_d_acl, step)
             if trial.should_prune():
-                print(f"Trial {trial.number} ukončen brzo (Pruned) kvůli nízkému výkonu na Epoše {epoch+1}")
+                print(f"Trial {trial.number} pruned early at epoch {epoch+1}")
                 raise optuna.exceptions.TrialPruned()
 
     return best_metric
 
-# ----------------------------------------------------
-# Main
-# ----------------------------------------------------
+
 def main():
     multiprocessing.freeze_support()
     set_seed(42)
@@ -241,27 +217,24 @@ def main():
     if torch.cuda.is_available():
         torch.set_float32_matmul_precision('high')
 
-    train_img_dir = r"A:\DATA_optimalizace\images_hpo"
-    train_mask_dir = r"A:\DATA_optimalizace\labels_hpo"
+    train_img_dir = r""
+    train_mask_dir = r""
 
     all_imgs = sorted(glob.glob(os.path.join(train_img_dir, "*.nii*")))
     all_masks = sorted(glob.glob(os.path.join(train_mask_dir, "*.nii*")))
 
     if len(all_imgs) == 0:
-        raise RuntimeError("Data nenalezena.")
+        raise RuntimeError("No data found.")
 
-    # Tvorba 1 trénovacího/validačního splitu pro HPO (test_size = 20%)
+    # Train/Val split (test_size = 20%)
     train_imgs, val_imgs, train_masks, val_masks = train_test_split(all_imgs, all_masks, test_size=0.2, random_state=42)
 
     train_files = [{"image": img, "label": mask} for img, mask in zip(train_imgs, train_masks)]
     val_files = [{"image": img, "label": mask} for img, mask in zip(val_imgs, val_masks)]
 
-    print(f"Dataset rozdělen pro HPO: {len(train_files)} Tréninkových, {len(val_files)} Validačních ukázek.")
+    print(f"Dataset split: {len(train_files)} train, {len(val_files)} validation samples.")
 
-    # ------------------
-    # Globální Před-Cached Data
-    # ------------------
-    # Tvorba datasetu bez random augmentací - zajistí načtení dat do RAM/GPU fixně
+    # Cache dataset in RAM without random augmentations
     base_transforms = Compose([
         LoadImaged(keys=["image", "label"]),
         EnsureChannelFirstd(keys=["image", "label"]),
@@ -269,17 +242,12 @@ def main():
         SpatialPadd(keys=["image", "label"], spatial_size=(128, 128, 128)),
     ])
 
-    print("Spouštím před-caching RAM")
+    print("Pre-caching dataset to RAM...")
     cached_train_ds = CacheDataset(data=train_files, transform=base_transforms, cache_rate=1.0, num_workers=0)
     cached_val_ds = CacheDataset(data=val_files, transform=base_transforms, cache_rate=1.0, num_workers=0)
 
-    # ------------------
     # Optuna HPO Setup
-    # ------------------
     study_name = "Blackwell_ACL_Optimization"
-    
-    # Vytvoření study v paměti
-    # Přepočítáno na validační kroky: n_warmup_steps=4 (20 epoch), interval_steps=1 (každá 5. epocha)
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=4, interval_steps=1)
     study = optuna.create_study(
         study_name=study_name, 
@@ -287,14 +255,10 @@ def main():
         pruner=pruner
     )
 
-    print(f"Začíná optimalizace... Výsledky se průběžně ukládají do 'optuna_tuning_results.csv'.")
-    
+    print(f"Starting optimization. Results saved to 'optuna_tuning_results.csv'.")
     
     def save_csv_callback(study, trial):
         study.trials_dataframe().to_csv("optuna_tuning_results.csv", index=False)
-
-
-
     
     study.optimize(
         lambda trial: objective(trial, cached_train_ds, cached_val_ds), 
@@ -303,11 +267,11 @@ def main():
     )
 
     print("="*40)
-    print("NEJLEPŠÍ IDENTIFIKOVANÉ PARAMETRY:")
+    print("BEST PARAMETERS FOUND:")
     print(study.best_params)
-    print(f"S Validačním Dice Skórem ACL: {study.best_value:.4f}")
+    print(f"Val ACL Dice Score: {study.best_value:.4f}")
 
-    # Úklid vah horších trialů a přejmenování vah toho nejlepšího
+    # Rename best model checkpoint and delete remaining checkpoints
     best_trial_num = study.best_trial.number
     best_model_path = f"best_model_trial_{best_trial_num}.pth"
     final_model_path = "best_hpo_model.pth"
@@ -316,9 +280,8 @@ def main():
         if os.path.exists(final_model_path):
             os.remove(final_model_path)
         os.rename(best_model_path, final_model_path)
-        print(f"\nVáhy nejlepšího trialu ({best_trial_num}) byly úspěšně uloženy do: {final_model_path}")
+        print(f"\nBest trial ({best_trial_num}) weights saved to: {final_model_path}")
         
-    # Smazání ostatních vah
     for f in glob.glob("best_model_trial_*.pth"):
         try:
             os.remove(f)

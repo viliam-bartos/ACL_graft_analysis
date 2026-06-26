@@ -15,35 +15,25 @@ from monai.transforms import (
 from monai.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 
-# ==============================================================================
-# CONFIG
-# ==============================================================================
+# Training configuration
 CONFIG = {
-    # Cesty k datům
-    "train_img_dir": r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train_full\images",
-    "train_csv": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\analyza_laterality_train_full.csv",
-    
+    "train_img_dir": r"",
+    "train_csv": r"",
     "val_split": 0.15,
-    
-    "output_dir": r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\checkpoints",
-    
-    # Parametry tréninku
-    "batch_size": 2,          # Fyzická velikost posílaná v jednu chvíli na GPU
-    "accumulation_steps": 8,  # Efektivní velikost dávky bude 2 * 8 = 16
+    "output_dir": r"",
+    "batch_size": 2,          # Physical batch size on GPU
+    "accumulation_steps": 8,  # Effective batch size = 2 * 8 = 16
     "epochs": 20,         
     "lr": 1e-4,
-    
-    # Architektura
     "spatial_size": (96, 96, 96), 
     "num_workers": 4
 }
-# ==============================================================================
 
 def load_data_from_csv(csv_path, img_dir):
-    """Načte cesty k obrázkům a jejich labely podle CSV."""
+    """Loads image paths and laterality labels from CSV."""
     data_list = []
     if not os.path.exists(csv_path):
-        print(f"[VAROVÁNÍ] CSV soubor chybí: {csv_path}")
+        print(f"[WARNING] CSV file missing: {csv_path}")
         return data_list
         
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -56,9 +46,8 @@ def load_data_from_csv(csv_path, img_dir):
             if not os.path.exists(img_path):
                 continue
                 
-            # Right = 1.0, Left = 0.0
+            # Class mapping: Right = 1.0, Left = 0.0
             label = 1.0 if laterality.strip().lower() == "right" else 0.0
-            
             data_list.append({"image": img_path, "label": label})
             
     return data_list
@@ -66,27 +55,26 @@ def load_data_from_csv(csv_path, img_dir):
 def main():
     os.makedirs(CONFIG["output_dir"], exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Používám zařízení: {device}")
+    print(f"Using device: {device}")
 
-    # 1. Transformace
-    # Validační transformace (čisté načtení a resize)
+    # Validation transforms (load and resize only)
     val_transforms = Compose([
         LoadImaged(keys=["image"]),
-        EnsureChannelFirstd(keys=["image"]), # Tvar (1, Z, Y, X)
+        EnsureChannelFirstd(keys=["image"]),
         Resized(keys=["image"], spatial_size=CONFIG["spatial_size"], mode="trilinear"), 
         ScaleIntensityd(keys=["image"], minv=0.0, maxv=1.0),
         EnsureTyped(keys=["image"], dtype=torch.float32)
     ])
 
-    # Trénovací transformace (s augmentacemi - pootočení a posun pro robustnost)
+    # Training transforms (with augmentation for robustness)
     train_transforms = Compose([
         LoadImaged(keys=["image"]),
         EnsureChannelFirstd(keys=["image"]),
         RandAffined(
             keys=["image"],
             prob=0.5,
-            rotate_range=(0.15, 0.15, 0.15),  # Mírné pootočení (~8-9 stupňů) ve všech osách
-            translate_range=(5, 5, 5),        # Posun max o 5 voxelů
+            rotate_range=(0.15, 0.15, 0.15),  # ~8-9 degrees rotation
+            translate_range=(5, 5, 5),        # Max 5 voxels translation
             mode="bilinear"
         ),
         Resized(keys=["image"], spatial_size=CONFIG["spatial_size"], mode="trilinear"), 
@@ -94,16 +82,14 @@ def main():
         EnsureTyped(keys=["image"], dtype=torch.float32)
     ])
 
-    # 2. Načtení dat
-    print("Načítám data...")
+    print("Loading data...")
     all_data = load_data_from_csv(CONFIG["train_csv"], CONFIG["train_img_dir"])
-    print(f"Nalezeno celkem {len(all_data)} vzorků.")
+    print(f"Found {len(all_data)} samples.")
 
     if len(all_data) == 0:
-        print("[CHYBA] Dataset je prázdný. Zkontroluj CSV cesty.")
+        print("[ERROR] Dataset is empty.")
         return
 
-    # Split na train a val
     train_data, val_data = train_test_split(
         all_data, 
         test_size=CONFIG["val_split"], 
@@ -111,10 +97,10 @@ def main():
         shuffle=True
     )
     
-    print(f"Rozděleno na {len(train_data)} trénovacích a {len(val_data)} validačních vzorků.")
+    print(f"Split into {len(train_data)} train and {len(val_data)} validation samples.")
     
     if len(train_data) == 0 or len(val_data) == 0:
-        print("[CHYBA] Trénovací nebo validační set je prázdný. Zkontroluj CSV cesty.")
+        print("[ERROR] Train or validation set is empty.")
         return
 
     train_ds = Dataset(data=train_data, transform=train_transforms)
@@ -123,18 +109,17 @@ def main():
     val_ds = Dataset(data=val_data, transform=val_transforms)
     val_loader = DataLoader(val_ds, batch_size=CONFIG["batch_size"], shuffle=False, num_workers=CONFIG["num_workers"])
 
-    # 3. Model: 3D ResNet-18
+    # 3D ResNet-18 model for binary classification
     model = resnet18(
         spatial_dims=3, 
         n_input_channels=1,
-        num_classes=1,  # Jedna logitová hodnota pro binární klasifikaci (Right/Left)
+        num_classes=1,
         norm=("instance", {"affine": True}) 
     ).to(device)
 
     loss_function = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=CONFIG["lr"])
 
-    # 4. Trénovací smyčka
     best_val_acc = -1.0
     
     for epoch in range(CONFIG["epochs"]):
@@ -144,26 +129,23 @@ def main():
         model.train()
         epoch_loss = 0
         step = 0
-        
-        optimizer.zero_grad() # Vynulování před první dávkou
+        optimizer.zero_grad()
         
         for i, batch_data in enumerate(train_loader):
             inputs = batch_data["image"].to(device)
-            labels = batch_data["label"].to(device).unsqueeze(1).float() # Zajištění shape (B, 1)
+            labels = batch_data["label"].to(device).unsqueeze(1).float()
             
             outputs = model(inputs)
             
-            # Loss podělíme počtem kumulačních kroků
+            # Gradient accumulation
             loss = loss_function(outputs, labels) / CONFIG["accumulation_steps"]
             loss.backward()
             
-            # Provedeme aktualizaci vah pouze když dosáhneme cesty accumulation_steps, 
-            # nebo pokud jsme na úplném konci trénovací sady.
             if ((i + 1) % CONFIG["accumulation_steps"] == 0) or ((i + 1) == len(train_loader)):
                 optimizer.step()
                 optimizer.zero_grad()
             
-            epoch_loss += loss.item() * CONFIG["accumulation_steps"] # Zpětný výpočet pro hezký výpis
+            epoch_loss += loss.item() * CONFIG["accumulation_steps"]
             step += 1
             
         print(f"Train Loss: {epoch_loss/step:.4f}")
@@ -186,7 +168,7 @@ def main():
                 val_loss += loss.item()
                 val_step += 1
                 
-                # Výpočet přesnosti
+                # Accuracy calculation
                 preds = (torch.sigmoid(outputs) > 0.5).float()
                 correct += (preds == labels).sum().item()
                 total += labels.size(0)
@@ -200,9 +182,9 @@ def main():
             best_val_acc = val_acc
             save_path = os.path.join(CONFIG["output_dir"], "best_laterality_model.pth")
             torch.save(model.state_dict(), save_path)
-            print(f" => Uložen nový nejlepší model! (Acc: {best_val_acc:.4f})")
+            print(f" => Saved new best model (Acc: {best_val_acc:.4f})")
 
-    print("Trénink dokončen.")
+    print("Training complete.")
     
 if __name__ == "__main__":
     main()

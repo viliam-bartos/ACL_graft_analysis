@@ -6,88 +6,65 @@ from scipy.ndimage import binary_dilation
 
 def create_surface_mesh(binary_mask, spacing=(1.0, 1.0, 1.0), origin=(0.0, 0.0, 0.0), smooth=True):
     """Converts a 3D numpy boolean/int array into a PyVista surface mesh."""
-    # Pad mask to ensure closed surfaces at the volume boundaries
+    # Pad mask to avoid boundary artifacts
     padded_mask = np.pad(binary_mask, 1, mode='constant', constant_values=0)
     
-    # Create PyVista Grid
     grid = pv.ImageData()
     grid.dimensions = padded_mask.shape
     grid.spacing = spacing
     grid.origin = tuple(o - s for o, s in zip(origin, spacing))
-    
-    # Add data, PyVista expects Fortran order for ImageData
     grid.point_data['values'] = padded_mask.flatten(order='F')
     
-    # Run marching cubes for isosurface
     mesh = grid.contour([0.5])
     
-    # Optional Laplacian smoothing for cleaner anatomical meshes
     if smooth and mesh.n_points > 0:
         mesh = mesh.smooth(n_iter=50, relaxation_factor=0.05)
         
     return mesh
 
 def visualize_results(mask_data, spacing, vis_data):
-    # =========================================================================
-    # 1. Configuration & Data Extraction
-    # =========================================================================
-    
-    # Extract calculated coordinates from the analysis pipeline
+    # 1. Config & Data Extraction
     dummy_femoral_centroid = vis_data.get('femoral_centroid', np.array([50.0, 60.0, 70.0]))
     dummy_tibial_centroid = vis_data.get('tibial_centroid', np.array([45.0, 55.0, 30.0]))
     
     dummy_plateau_normal = vis_data.get('plateau_normal', np.array([0.05, 0.05, 1.0]))
-    # Ensure normal is normalized
     if np.linalg.norm(dummy_plateau_normal) > 0:
         dummy_plateau_normal = dummy_plateau_normal / np.linalg.norm(dummy_plateau_normal)
         
     dummy_plateau_center = vis_data.get('plateau_center', np.array([45.0, 55.0, 32.0]))
     
-    # Bernard & Hertel Grid (Lateral Femoral Condyle Box) - keeping heuristic based on femoral centroid
-    # In PyVista based on Numpy (R-L, S-I, A-P), dimensions are X=R-L, Y=S-I, Z=A-P.
-    # A sagittal slice has a fixed R-L (X coordinate) and extends along Y and Z.
     bh_sagittal_x = dummy_femoral_centroid[0] if not np.isnan(dummy_femoral_centroid[0]) else 50.0
     bh_y_min, bh_y_max = 40.0, 80.0
     bh_z_min, bh_z_max = 60.0, 100.0
 
     origin = (0.0, 0.0, 0.0)
 
-    # Label extraction (1=ACL, 2=Femur, 3=Tibia)
+    # 1=ACL, 2=Femur, 3=Tibia
     mask_acl = mask_data == 1
     mask_femur = mask_data == 2
     mask_tibia = mask_data == 3
     
-    # Footprint calculation: Intersection of slightly dilated ACL with Bone masks
+    # Isolate femoral/tibial footprints
     print("Isolating footprints...")
     dilated_acl = binary_dilation(mask_acl, iterations=2)
     footprint_femur_mask = dilated_acl & mask_femur
     footprint_tibia_mask = dilated_acl & mask_tibia
 
-    # =========================================================================
     # 2. Generating PyVista Meshes
-    # =========================================================================
-    print("Generating 3D anatomical meshes (this may take a moment)...")
+    print("Generating 3D anatomical meshes...")
     mesh_acl = create_surface_mesh(mask_acl, spacing=spacing, origin=origin)
     mesh_femur = create_surface_mesh(mask_femur, spacing=spacing, origin=origin)
     mesh_tibia = create_surface_mesh(mask_tibia, spacing=spacing, origin=origin)
     
-    # Footprint meshes (no smoothing so exact intersection voxels are seen)
     mesh_fp_femur = create_surface_mesh(footprint_femur_mask, spacing=spacing, origin=origin, smooth=False)
     mesh_fp_tibia = create_surface_mesh(footprint_tibia_mask, spacing=spacing, origin=origin, smooth=False)
 
-    # =========================================================================
-    # 3. Geometric Overlays Creation
-    # =========================================================================
-    # A. Centroids (Solid Spheres)
+    # 3. Geometric Overlays
     sphere_femoral = pv.Sphere(radius=2.0, center=dummy_femoral_centroid)
     sphere_tibial = pv.Sphere(radius=2.0, center=dummy_tibial_centroid)
-    
-    # B. ACL Vector (Connecting Line)
     vector_line = pv.Line(dummy_femoral_centroid, dummy_tibial_centroid)
     
-    # C. Tibial Plateau Plane
-    # To prevent PyVista from arbitrarily rotating the plane edges (creating a 'rhombus'), 
-    # we enforce the i_direction to be roughly the Left-Right axis (1, 0, 0), projected onto the plane.
+    # Define coordinate system for tibial plateau plane
     temp_i = np.array([1.0, 0.0, 0.0])
     temp_i_proj = temp_i - np.dot(temp_i, dummy_plateau_normal) * dummy_plateau_normal
     if np.linalg.norm(temp_i_proj) > 0:
@@ -98,20 +75,15 @@ def visualize_results(mask_data, spacing, vis_data):
     j_dir = np.cross(dummy_plateau_normal, i_dir)
     j_dir = j_dir / np.linalg.norm(j_dir)
 
-    plateau_plane = pv.Plane(center=dummy_plateau_center, direction=dummy_plateau_normal,
-                             i_size=60, j_size=60, 
-                             i_resolution=1, j_resolution=1)
-    
-   
     base_plane = pv.Plane(center=(0,0,0), direction=(0,0,1), i_size=60, j_size=60, i_resolution=1, j_resolution=1)
-    # Transformation matrix: Columns are i_dir, j_dir, normal, and the last column is the translation.
     trans_matrix = np.eye(4)
     trans_matrix[0:3, 0] = i_dir
     trans_matrix[0:3, 1] = j_dir
     trans_matrix[0:3, 2] = dummy_plateau_normal
     trans_matrix[0:3, 3] = dummy_plateau_center
     plateau_plane = base_plane.transform(trans_matrix, inplace=False)
-    # D. Bernard & Hertel Grid
+
+    # Bernard & Hertel Grid
     bh_lines = []
     bh_grid_info = vis_data.get('bh_grid_info', {})
     bh_grid_data = bh_grid_info.get('lines', []) if isinstance(bh_grid_info, dict) else bh_grid_info
@@ -122,7 +94,7 @@ def visualize_results(mask_data, spacing, vis_data):
         for start_pt, end_pt in bh_grid_data:
             bh_lines.append(pv.Line(start_pt, end_pt))
     else:
-        # Fallback dummy logic
+        # Fallback grid logic
         for i in range(5):
             y = bh_y_min + i * (bh_y_max - bh_y_min) / 4.0
             bh_lines.append(pv.Line([bh_sagittal_x, y, bh_z_min], [bh_sagittal_x, y, bh_z_max]))
@@ -132,7 +104,7 @@ def visualize_results(mask_data, spacing, vis_data):
             
     bh_grid_multiblock = pv.MultiBlock(bh_lines)
 
-    # E. Reference edge and orientation points
+    # Reference edge and orientation points
     if ref_edge:
         ref_line = pv.Line(ref_edge[0], ref_edge[1])
         ref_point_1 = pv.Sphere(radius=2.0, center=ref_edge[0])
@@ -142,7 +114,7 @@ def visualize_results(mask_data, spacing, vis_data):
         ref_point_1 = pv.PolyData()
         ref_point_2 = pv.PolyData()
         
-    # F. Blumensaat line (True Regression Line)
+    # Blumensaat line (True Regression Line)
     if blum_line:
         actor_blum_line = pv.Line(blum_line[0], blum_line[1])
         actor_blum_pt1 = pv.Sphere(radius=2.5, center=blum_line[0])
@@ -152,7 +124,7 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_blum_pt1 = pv.PolyData()
         actor_blum_pt2 = pv.PolyData()
 
-    # G. ATT Lines (Perpendicular)
+    # ATT Lines (Perpendicular)
     att_info = vis_data.get('att_info', {})
     if att_info and 'tibia_pt' in att_info:
         t_pt = att_info['tibia_pt']
@@ -160,7 +132,7 @@ def visualize_results(mask_data, spacing, vis_data):
         v_ant = att_info['v_anterior']
         n_p = att_info['plane_normal']
         
-        # Perpendicular line to plateau plane
+        # Perpendiculars to plateau
         t_line_start = t_pt - 40 * n_p
         t_line_end = t_pt + 40 * n_p
         f_line_start = f_pt - 40 * n_p
@@ -182,7 +154,7 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_att_f_pt = pv.PolyData()
         actor_att_measure = pv.PolyData()
 
-    # H. Stäubli Measurement Lines
+    # Stäubli Measurement Lines
     staubli_info = vis_data.get('staubli_info', {})
     if staubli_info and 'anterior_pt' in staubli_info:
         ant_pt = staubli_info['anterior_pt']
@@ -202,22 +174,17 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_staubli_post = pv.PolyData()
         actor_staubli_cent_pt = pv.PolyData()
 
-    # =========================================================================
     # 4. PyVista Plotter Setup and Rendering
-    # =========================================================================
     plotter = pv.Plotter(title="ACL 3D Geometric Analysis Verification")
     plotter.set_background("white")
     
-    # Add main anatomical actors
     actor_femur = plotter.add_mesh(mesh_femur, color="ivory", opacity=0.3, label="Femur")
     actor_tibia = plotter.add_mesh(mesh_tibia, color="beige", opacity=0.3, label="Tibia")
     actor_acl = plotter.add_mesh(mesh_acl, color="orange", opacity=0.6, label="ACL")
     
-    # Add exact contact areas (Footprints)
     actor_fp_femur = plotter.add_mesh(mesh_fp_femur, color="red", label="Femoral Footprint")
     actor_fp_tibia = plotter.add_mesh(mesh_fp_tibia, color="red", label="Tibial Footprint")
     
-    # Add geometric calculation actors
     actor_cent_femur = plotter.add_mesh(sphere_femoral, color="blue", label="Femoral Centroid")
     actor_cent_tibia = plotter.add_mesh(sphere_tibial, color="green", label="Tibial Centroid")
     actor_vector = plotter.add_mesh(vector_line, color="purple", line_width=5, label="ACL Vector")
@@ -232,34 +199,33 @@ def visualize_results(mask_data, spacing, vis_data):
         actor_ref_edge = actor_ref_pt1 = actor_ref_pt2 = None
         
     if blum_line:
-        actor_bl = plotter.add_mesh(actor_blum_line, color="green", line_width=6, label="Regrese: Blumensaatova linie")
+        actor_bl = plotter.add_mesh(actor_blum_line, color="green", line_width=6, label="Regression: Blumensaat Line")
         actor_bl_p1 = plotter.add_mesh(actor_blum_pt1, color="lime", label="Blumensaat Pt1")
         actor_bl_p2 = plotter.add_mesh(actor_blum_pt2, color="lime", label="Blumensaat Pt2")
     else:
         actor_bl = actor_bl_p1 = actor_bl_p2 = None
 
     if att_info and 'tibia_pt' in att_info:
-        actor_att_t = plotter.add_mesh(actor_att_t_line, color="red", line_width=4, label="ATT Kolmice: Tibia")
-        actor_att_f = plotter.add_mesh(actor_att_f_line, color="blue", line_width=4, label="ATT Kolmice: Femur")
-        actor_att_m = plotter.add_mesh(actor_att_measure, color="yellow", line_width=5, label="ATT Vzdálenost")
-        actor_att_tp = plotter.add_mesh(actor_att_t_pt, color="red", label="ATT Bod: Tibia")
-        actor_att_fp = plotter.add_mesh(actor_att_f_pt, color="blue", label="ATT Bod: Femur")
+        actor_att_t = plotter.add_mesh(actor_att_t_line, color="red", line_width=4, label="ATT Perpendicular: Tibia")
+        actor_att_f = plotter.add_mesh(actor_att_f_line, color="blue", line_width=4, label="ATT Perpendicular: Femur")
+        actor_att_m = plotter.add_mesh(actor_att_measure, color="yellow", line_width=5, label="ATT Distance")
+        actor_att_tp = plotter.add_mesh(actor_att_t_pt, color="red", label="ATT Point: Tibia")
+        actor_att_fp = plotter.add_mesh(actor_att_f_pt, color="blue", label="ATT Point: Femur")
     else:
         actor_att_t = actor_att_f = actor_att_m = actor_att_tp = actor_att_fp = None
 
     if staubli_info and 'anterior_pt' in staubli_info:
-        actor_staubli_l = plotter.add_mesh(actor_staubli_line, color="cyan", line_width=6, label="Stäubli: AP Průměr")
-        actor_staubli_a = plotter.add_mesh(actor_staubli_ant, color="turquoise", label="Stäubli: Přední okraj")
-        actor_staubli_p = plotter.add_mesh(actor_staubli_post, color="turquoise", label="Stäubli: Zadní okraj")
-        actor_staubli_c = plotter.add_mesh(actor_staubli_cent_pt, color="pink", label="Stäubli: Úpon na AP ose")
+        actor_staubli_l = plotter.add_mesh(actor_staubli_line, color="cyan", line_width=6, label="Stäubli: AP Diameter")
+        actor_staubli_a = plotter.add_mesh(actor_staubli_ant, color="turquoise", label="Stäubli: Anterior Edge")
+        actor_staubli_p = plotter.add_mesh(actor_staubli_post, color="turquoise", label="Stäubli: Posterior Edge")
+        actor_staubli_c = plotter.add_mesh(actor_staubli_cent_pt, color="pink", label="Stäubli: Insert on AP Axis")
     else:
         actor_staubli_l = actor_staubli_a = actor_staubli_p = actor_staubli_c = None
 
-    # Add default interaction tools
     plotter.add_axes()
     plotter.add_legend(bcolor=(1, 1, 1), face='rectangle')
 
-    # Add Interactive Checkbox Toggles for Visibility
+    # Checkbox visibility toggle helper
     def toggle_vis(flag, actors):
         if not isinstance(actors, (list, tuple)):
             actors = [actors]
@@ -293,23 +259,23 @@ def visualize_results(mask_data, spacing, vis_data):
         
     if blum_line:
         elements.extend([
-            ("Regrese: Blumensaatova Linie", actor_bl, "green"),
-            ("Blum. Začátek", actor_bl_p1, "lime"),
-            ("Blum. Konec", actor_bl_p2, "lime")
+            ("Regression: Blumensaat Line", actor_bl, "green"),
+            ("Blum. Start", actor_bl_p1, "lime"),
+            ("Blum. End", actor_bl_p2, "lime")
         ])
         
     if att_info and 'tibia_pt' in att_info:
         elements.extend([
-            ("ATT: Kolmice Tibie (R)", (actor_att_t, actor_att_tp), "red"),
-            ("ATT: Kolmice Femuru (B)", (actor_att_f, actor_att_fp), "blue"),
-            ("ATT: Vzdálenost (Y)", actor_att_m, "yellow")
+            ("ATT: Tibial Perp.", (actor_att_t, actor_att_tp), "red"),
+            ("ATT: Femoral Perp.", (actor_att_f, actor_att_fp), "blue"),
+            ("ATT: Distance", actor_att_m, "yellow")
         ])
         
     if staubli_info and 'anterior_pt' in staubli_info:
         elements.extend([
-            ("Stäubli AP Přímka (C)", actor_staubli_l, "cyan"),
-            ("Stäubli Okraje Tibie", (actor_staubli_a, actor_staubli_p), "turquoise"),
-            ("Stäubli Zaměřený Úpon", actor_staubli_c, "pink")
+            ("Stäubli AP Line", actor_staubli_l, "cyan"),
+            ("Stäubli Tibial Edges", (actor_staubli_a, actor_staubli_p), "turquoise"),
+            ("Stäubli Insertion", actor_staubli_c, "pink")
         ])
     
     for i, (name, actor, color_code) in enumerate(elements):
