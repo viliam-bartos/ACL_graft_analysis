@@ -5,12 +5,12 @@ from visualizator_analyzator import visualize_results
 
 def run_pipeline(mri_path, mask_path):
     
-    ref_path = r"C:\DIPLOM_PRACE\ACL_segment\dataset_split\train\images\case_074.nii.gz"
+    ref_path = r""
     
-    # 1. Run analysis and radiomics
+    # Run analysis
     results_dict, mask_array, spacing, f_centroid, t_centroid, plane_info = run_analysis(mri_path, ref_path, mask_path)
     
-    # 2. Save results to CSV (write header only for the first row)
+    # Save results to CSV (header on first write)
     df = pd.DataFrame([results_dict])
     header = not os.path.exists("acl_results.csv")
     df.to_csv("acl_results.csv", mode='a', header=header, index=False)
@@ -30,4 +30,4 @@ def run_pipeline(mri_path, mask_path):
 
 if __name__ == "__main__":
     
-    run_pipeline(r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\images_train_full_canonical\case_043.nii.gz", r"C:\DIPLOM_PRACE\ACL_segment\kanonizace\masks_train_full_canonical\mask_case_043.nii.gz")
+    run_pipeline(r"", r"")
