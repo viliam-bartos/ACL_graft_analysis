@@ -1,5 +1,5 @@
 @echo off
-
+rem Legacy launcher forwarding to Run_ACL_Analysis.bat
 cd /d "%~dp0"
-start "" .venv\pythonw.exe Source\main\gui_app.py
+call Run_ACL_Analysis.bat
 exit

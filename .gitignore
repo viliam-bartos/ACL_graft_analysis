@@ -1,66 +1,40 @@
-#Ignore thumbnails created by Windows & Mac
-Thumbs.db
-.DS_Store
-
-#Ignore thumbnails created by Windows & Mac
-Thumbs.db
-.DS_Store
-
-# Ignore everything in the "Untracked" folder
-Untracked/
-
-# Ignore IDE folders
-.vs/
-.vscode/
-.idea/
-
-# Ignore python venvs
-.venv/
-
-#Ignore binaries
-*.exe
-[Bb]in
-[Dd]ebug*/
-[Rr]elease*/
-
-# Ignore log files
-*.log
-
-
-# Ignore IDE folders
-.vs/
-.vscode/
-.idea/
-
-# Ignore python venvs
+# Python environment and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
 .venv/
 venv/
+env/
+build/
+dist/
+*.egg-info/
 
-#Ignore binaries
-*.exe
-[Bb]in
-[Dd]ebug*/
-[Rr]elease*/
+# Operating System files
+Thumbs.db
+.DS_Store
+ehthumbs.db
 
-# Ignore log files
+# IDE configuration
+.vscode/
+.vs/
+.idea/
+
+# Logging & profiling
 *.log
+*.prof
 
-
+# Large medical datasets & models (keep reference data and 5CV)
 data_train/
 dataset_split/
 puvodni_mr_data/
 labels/
-__pycache__/
-.venv/
-venv/
-.vscode/
-.idea/
 results_3D/
 vysledky_modelu/
-*.csv
-*.png
-*.pdf
-*.json
-*.dcm
-*.nii
 Data/Data_analyza/
+*.dcm
+
+# Output visualizations and reports
+*.pdf
+Results/*.png
+Results/*.csv
+!Results/acl_results.csv

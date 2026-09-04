@@ -1,0 +1,6 @@
+{
+    "anaknee_ref_mri": "C:/ACL_analysis/ACL_graft_analysis/Data/reference/right_case_074.nii.gz",
+    "model_ckpt": "C:\\ACL_analysis\\ACL_graft_analysis\\Weights\\model.pth",
+    "ensemble_dir": "C:\\ACL_analysis\\ACL_graft_analysis\\Data\\5CV",
+    "gt_masks_dir": "C:\\ACL_analysis\\ACL_graft_analysis\\Data\\GT"
+}
