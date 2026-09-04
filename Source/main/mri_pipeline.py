@@ -37,7 +37,13 @@ for path in [
         sys.path.append(str(path))
 
 
-from WORKSTATION_BLACKWELL_MULTICLASS_5CV import LightUNet3D  # noqa: E402
+try:
+    from models.unet3d import LightUNet3D
+except ImportError:
+    try:
+        from Source.models.unet3d import LightUNet3D
+    except ImportError:
+        from WORKSTATION_BLACKWELL_MULTICLASS_5CV import LightUNet3D  # noqa: E402
 from main_acl_analysis import run_analysis  # noqa: E402
 from visualizator_analyzator import visualize_results  # noqa: E402
 
@@ -121,30 +127,37 @@ def convert_dicom_to_nifti(dicom_path, output_dir):
     return nifti_paths
 
 
-CONFIG = {
-    "mode": "FILE",  # "FILE" or "FOLDER"
-    "input_path": r"Data\reference\right_case_074.nii.gz",
-    "input_dir": r"",
-    "output_dir": r"Data\reference\vysledky_074",
-    "log_file": "pipeline.log",
-    "anaknee_ref_mri": r"Data\reference\right_case_074.nii.gz",
-    "gt_masks_dir": r"",
-    "model_ckpt": r"",
-    "patch_size": (128, 128, 80),
-    "base_filters": 64,
-    "use_ensemble": True,
-    "ensemble_dir": r"Data\5CV",
-    "ensemble_pattern": "best_model_fold_*.pth",
-    "run_inference": 1,
-    "run_segmentation_analysis": 0,
-    "run_anatomical_analysis": 1,
-    # Post-processing (1: ACL, 2: Femur, 3: Tibia)
-    "post_proc_classes": {
-        1: {"lcc": True, "hole_filling": False, "closing": False},
-        2: {"lcc": True, "hole_filling": True, "closing": True, "closing_kernel": 2},
-        3: {"lcc": True, "hole_filling": True, "closing": True, "closing_kernel": 2},
-    },
-}
+try:
+    from config import PipelineSettings, DEFAULT_SETTINGS
+    CONFIG = DEFAULT_SETTINGS.to_dict()
+except ImportError:
+    try:
+        from Source.config import PipelineSettings, DEFAULT_SETTINGS
+        CONFIG = DEFAULT_SETTINGS.to_dict()
+    except ImportError:
+        CONFIG = {
+            "mode": "FILE",  # "FILE" or "FOLDER"
+            "input_path": r"Data\reference\right_case_074.nii.gz",
+            "input_dir": r"",
+            "output_dir": r"Data\reference\vysledky_074",
+            "log_file": "pipeline.log",
+            "anaknee_ref_mri": r"Data\reference\right_case_074.nii.gz",
+            "gt_masks_dir": r"",
+            "model_ckpt": r"",
+            "patch_size": (128, 128, 80),
+            "base_filters": 64,
+            "use_ensemble": True,
+            "ensemble_dir": r"Data\5CV",
+            "ensemble_pattern": "best_model_fold_*.pth",
+            "run_inference": 1,
+            "run_segmentation_analysis": 0,
+            "run_anatomical_analysis": 1,
+            "post_proc_classes": {
+                1: {"lcc": True, "hole_filling": False, "closing": False},
+                2: {"lcc": True, "hole_filling": True, "closing": True, "closing_kernel": 2},
+                3: {"lcc": True, "hole_filling": True, "closing": True, "closing_kernel": 2},
+            },
+        }
 
 
 def setup_logging(output_dir, log_file_name):
@@ -185,7 +198,7 @@ def resample_image_sitk(sitk_img, target_spacing=(0.5, 0.5, 0.5)):
     resample.SetOutputOrigin(sitk_img.GetOrigin())
     resample.SetTransform(sitk.Transform())
     resample.SetDefaultPixelValue(sitk_img.GetPixelIDValue())
-    resample.SetInterpolator(sitk.sitkBSpline)
+    resample.SetInterpolator(sitk.sitkLinear)
 
     return resample.Execute(sitk_img)
 
@@ -610,28 +623,26 @@ def _load_ensemble_models(config, device):
     return loaded_models
 
 
-def run_visualization_only(img_path, ref_path, mask_path):
-    """Quick analysis + PyVista 3D viewer (no CSV logging)."""
-    from anaknee.main_acl_analysis import run_analysis
-    from anaknee.visualizator_analyzator import visualize_results
+def run_visualization_only(img_path=None, ref_path=None, mask_path=None):
+    """
+    Fast PyVista 3D viewer (no CSV logging, no slow radiomics).
+    - If mask_path is provided: runs fast geometric reconstruction (bones, ACL, plateau, B&H, ATT).
+    - If only img_path is provided: opens 3D MRI volume viewer (orthogonal slices).
+    """
+    from anaknee.visualizator_analyzator import smart_visualize, visualize_results, visualize_mri_volume
     try:
-        logging.info(f"Preparing 3D visualization for: {os.path.basename(img_path)}")
-        res_dict, mask_array_ana, spacing_zyx, f_cent, t_cent, p_info = run_analysis(
-            img_path, ref_path, mask_path
-        )
-        vis_data = {
-            "femoral_centroid": f_cent,
-            "tibial_centroid": t_cent,
-            "plateau_normal": p_info["normal"],
-            "plateau_center": p_info["center"],
-            "bh_grid_info": p_info.get("bh_grid_info", {}),
-            "att_info": p_info.get("att_info", {}),
-            "staubli_info": p_info.get("staubli_info", {}),
-            "plateau_inliers": p_info.get("plateau_inliers"),
-            "plateau_outliers": p_info.get("plateau_outliers"),
-            "results_dict": res_dict,
-        }
-        visualize_results(mask_array_ana, spacing_zyx, vis_data)
+        if mask_path and os.path.exists(mask_path):
+            logging.info(f"Preparing fast 3D anatomical visualization for: {os.path.basename(mask_path)}")
+            from anaknee.main_acl_analysis import run_geometric_analysis_from_mask
+            res_dict, mask_array_ana, spacing_zyx, f_cent, t_cent, p_info, vis_data = run_geometric_analysis_from_mask(
+                mask_path
+            )
+            visualize_results(mask_array_ana, spacing_zyx, vis_data)
+        elif img_path and os.path.exists(img_path):
+            logging.info(f"Opening 3D volume viewer for MRI: {os.path.basename(img_path)}")
+            visualize_mri_volume(img_path)
+        else:
+            logging.error("run_visualization_only: No valid mask or image path provided.")
     except Exception as e:
         logging.error(f"Could not open 3D visualization: {e}")
         traceback.print_exc()

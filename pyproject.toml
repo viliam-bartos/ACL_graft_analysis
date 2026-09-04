@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acl-graft-analysis"
+version = "1.0.0"
+description = "Automated MRI Segmentation, AI Modeling, and Biomechanical Reconstruction for ACL Graft Analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Viliam Bartos" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "scikit-image",
+    "SimpleITK",
+    "nibabel",
+    "torch",
+    "monai",
+    "pyvista",
+    "customtkinter",
+    "pandas",
+    "seaborn",
+    "matplotlib"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+where = ["Source"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

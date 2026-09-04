@@ -67,11 +67,29 @@ def run_analysis(
   * `"att_info"`: Slovník bodů a vektorů pro zobrazení přední translace tibie.
   * `"staubli_info"`: Slovník bodů pro zobrazení Stäubliho úsečky na platu.
 
+### 2.2 `run_geometric_analysis_from_mask`
+Blesková geometrická analýza přímo ze segmentační masky (vynechává zdlouhavé histogramové párování a radiomiku). Doba běhu cca 1–2 s.
+
+```python
+def run_geometric_analysis_from_mask(
+    mask_input: Union[str, sitk.Image, np.ndarray],
+    spacing: Optional[Tuple[float, float, float]] = None
+) -> Tuple[
+    Dict[str, Any],                      # results_dict
+    np.ndarray,                          # mask_array (RIA orientace)
+    Tuple[float, float, float],          # spacing_zyx (sz, sy, sx)
+    Tuple[float, float, float],          # f_centroid (femorální footprint v mm)
+    Tuple[float, float, float],          # t_centroid (tibiální footprint v mm)
+    Dict[str, Any],                      # plane_info
+    Dict[str, Any]                       # vis_data připravená pro visualize_results
+]:
+```
+
 ---
 
 ## 3. Modul `Source/anaknee/visualizator_analyzator.py`
 
-3D vizualizační okno postavené na PyVista s prémiovým medicínským dark theme, seskupenými checkboxy a informačním panelem metrik.
+3D vizualizační jádro postavené na PyVista s prémiovým medicínským dark theme, seskupenými checkboxy a informačním panelem metrik.
 
 ### 3.1 `visualize_results`
 Otevře interaktivní 3D okno s polyedrickými sítěmi kostí, štěpu, RANSAC mračny bodů plata a biomedicínskými osami.
@@ -84,24 +102,52 @@ def visualize_results(
 ) -> None:
 ```
 
-* **Parametry**:
-  * `mask_array`: 3D NumPy pole segmentační masky (hodnoty 0–3) v kanonické RIA orientaci.
-  * `spacing`: Trojice fyzikálních rozměrů voxelů `(sz, sy, sx)`.
-  * `vis_data`: Slovník obsahující:
-    * `'femoral_centroid'`: Těžiště femorálního úponu v mm (`np.ndarray` nebo `list`).
-    * `'tibial_centroid'`: Těžiště tibiálního úponu v mm (`np.ndarray` nebo `list`).
-    * `'plateau_normal'`: Normálový vektor plata (`np.ndarray`).
-    * `'plateau_center'`: Těžiště plata (`np.ndarray`).
-    * `'plateau_inliers'`: Mračno RANSAC inlierů pro vizualizaci kortikálního plata.
-    * `'plateau_outliers'`: Mračno RANSAC outlierů (eminence, osteofyty).
-    * `'bh_grid_info'`: Data Bernard-Hertel mřížky.
-    * `'att_info'`: Geometrie pro měření ATT.
-    * `'staubli_info'`: Geometrie pro Stäubliho měření.
-    * `'results_dict'`: Slovník vypočtených metrik zobrazený v pravém horním rohu okna.
+### 3.2 `visualize_mri_volume`
+Interaktivní 3D prohlížeč surových MRI dat / šedotónových objemů. Zobrazuje ortogonální řezy (axiální, sagitální, koronální), denzitní škálu, ohraničující box a fyzikální rozměry.
+
+```python
+def visualize_mri_volume(
+    image_input: Union[str, sitk.Image, np.ndarray],
+    spacing: Optional[Tuple[float, float, float]] = None,
+    title: str = "MRI 3D Volume Viewer"
+) -> None:
+```
+
+### 3.3 `smart_visualize`
+Univerzální funkce schopná automaticky rozpoznat typ vstupního objemu (maska vs. MRI sken) a spustit odpovídající 3D zobrazení.
+
+```python
+def smart_visualize(
+    primary_path: str,
+    secondary_path: Optional[str] = None
+) -> None:
+```
 
 ---
 
-## 4. Modul `Source/blackwell/WORKSTATION_BLACKWELL_MULTICLASS_5CV.py`
+## 4. Modul `Source/main/gui_app.py`
+
+Uživatelské rozhraní postavené na CustomTkinter.
+
+### 4.1 Architektura záložek
+1. **`🚀 3D Prohlížeč (PyVista)`**:
+   - Primární vstup pro výběr libovolného NIfTI/DICOM souboru s automatickou detekcí typu objemu.
+   - Rychlé předvolby referenčních dat (1-klik načtení).
+   - Tlačítko **`▶ OTEVŘÍT V PYVISTA 3D`** spouštějící vizualizaci na pozadí (`threading.Thread(daemon=True)`).
+   - Rychlý panel naměřených hodnot (ATT, Stäubli, Úhel plata, B&H).
+2. **`⚡ Dávková Analýza`**:
+   - Zpracování jednotlivého souboru nebo celé složky pacienta.
+   - Volba modulů (AI segmentace, geometrie, volitelná radiomika).
+   - Průběhový ukazatel a rozbalitelná textová konzole.
+3. **`📊 Výsledky & Případy`**:
+   - Seznam zpracovaných případů s přímým tlačítkem **`👁 3D`** u každého řádku pro okamžité otevření v PyVista.
+   - Graf trendu vybraného biomarkeru.
+4. **`⚙ Nastavení`**:
+   - Konfigurace cest k modelům a referenčním datům s kontrolou existence souborů.
+
+---
+
+## 5. Modul `Source/blackwell/WORKSTATION_BLACKWELL_MULTICLASS_5CV.py`
 
 Architektura neuronové sítě.
 

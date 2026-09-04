@@ -58,7 +58,7 @@ def create_surface_mesh(binary_mask, spacing=(1.0, 1.0, 1.0), origin=(0.0, 0.0, 
     mesh = grid.contour([0.5])
     
     if smooth and mesh.n_points > 0:
-        mesh = mesh.smooth(n_iter=50, relaxation_factor=0.05)
+        mesh = mesh.smooth(n_iter=20, relaxation_factor=0.1)
         
     return mesh
 
@@ -397,3 +397,130 @@ def visualize_results(mask_data, spacing, vis_data):
     # ── Launch ──────────────────────────────────────────────────────
     print("\n[INFO] Starting interactive 3D viewer. Use the checkboxes to toggle element groups.")
     plotter.show()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MRI Volume Viewer (Grayscale Orthoslices & Volume Rendering)
+# ═══════════════════════════════════════════════════════════════════════
+def visualize_mri_volume(image_input, spacing=None, title="MRI 3D Volume Viewer"):
+    """
+    Interactive PyVista viewer for raw MRI / grayscale 3D volumes.
+    Displays orthogonal slices with medical window/level, bounding box, axes, and metadata.
+    
+    Args:
+        image_input (str, sitk.Image, or np.ndarray): File path, SimpleITK image, or 3D numpy array.
+        spacing (tuple, optional): Voxel spacing (sz, sy, sx) if numpy array.
+        title (str): Window title.
+    """
+    import SimpleITK as sitk
+
+    if isinstance(image_input, str):
+        sitk_img = sitk.ReadImage(image_input)
+        sp = sitk_img.GetSpacing()
+        spacing = (sp[0], sp[1], sp[2])
+        arr = sitk.GetArrayFromImage(sitk_img).astype(np.float32)
+        if title == "MRI 3D Volume Viewer":
+            import os
+            title = f"MRI Volume: {os.path.basename(image_input)}"
+    elif isinstance(image_input, sitk.Image):
+        sp = image_input.GetSpacing()
+        spacing = (sp[0], sp[1], sp[2])
+        arr = sitk.GetArrayFromImage(image_input).astype(np.float32)
+    elif isinstance(image_input, np.ndarray):
+        arr = image_input.astype(np.float32)
+        spacing = spacing if spacing is not None else (1.0, 1.0, 1.0)
+    else:
+        raise ValueError(f"Unsupported image input type: {type(image_input)}")
+
+    p = _PALETTE
+    grid = pv.ImageData()
+    grid.dimensions = arr.shape
+    grid.spacing = spacing
+    grid.point_data["values"] = arr.flatten(order="F")
+
+    plotter = pv.Plotter(title=title, window_size=(1400, 900))
+    plotter.set_background(p["bg_bottom"], top=p["bg_top"])
+
+    # Orthogonal slices
+    slices = grid.slice_orthogonal()
+    plotter.add_mesh(
+        slices, cmap="bone", show_scalar_bar=True,
+        scalar_bar_args={"title": "Intensity", "color": p["text"], "width": 0.25}
+    )
+    plotter.add_bounding_box(color=p["text_dim"])
+
+    plotter.add_axes(
+        color=p["text_dim"],
+        line_width=2,
+        xlabel="X (mm)", ylabel="Y (mm)", zlabel="Z (mm)"
+    )
+
+    plotter.add_text(
+        title,
+        position="upper_left",
+        font_size=13,
+        color=p["text"],
+        font="arial",
+        shadow=True,
+    )
+
+    # Volume metadata overlay
+    v_min, v_max = float(arr.min()), float(arr.max())
+    info_text = (
+        f"Dimensions: {arr.shape[2]} x {arr.shape[1]} x {arr.shape[0]}\n"
+        f"Spacing: {spacing[0]:.2f} x {spacing[1]:.2f} x {spacing[2]:.2f} mm\n"
+        f"Intensity: [{v_min:.1f}, {v_max:.1f}]"
+    )
+    plotter.add_text(
+        info_text,
+        position="upper_right",
+        font_size=10,
+        color=p["text"],
+        font="courier",
+        shadow=True,
+    )
+
+    print(f"\n[INFO] Starting MRI Volume Viewer: {title}")
+    plotter.show()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Smart Universal Volume Visualizer
+# ═══════════════════════════════════════════════════════════════════════
+def smart_visualize(primary_path, secondary_path=None):
+    """
+    Intelligently inspects and visualizes ANY medical volume in PyVista:
+    - If primary is a segmentation mask -> runs fast geometric analysis and opens anatomical 3D viewer.
+    - If primary is an MRI scan and secondary is a mask -> runs anatomical 3D viewer with scan context.
+    - If primary is an MRI scan -> opens interactive orthogonal slice volume viewer.
+    
+    Args:
+        primary_path (str): Path to volume (.nii, .nii.gz, .dcm)
+        secondary_path (str, optional): Secondary mask or image path.
+    """
+    import os
+    import SimpleITK as sitk
+    from anaknee.main_acl_analysis import run_geometric_analysis_from_mask
+
+    if not os.path.exists(primary_path):
+        raise FileNotFoundError(f"Primary volume file not found: {primary_path}")
+
+    # Read image header / small sample to detect mask vs grayscale
+    sitk_img = sitk.ReadImage(primary_path)
+    arr_sample = sitk.GetArrayViewFromImage(sitk_img)
+    u_vals = np.unique(arr_sample[:min(10, arr_sample.shape[0])])
+    is_mask = (len(u_vals) <= 10 and arr_sample.max() <= 10) or os.path.basename(primary_path).startswith("mask_")
+
+    if is_mask:
+        print(f"[INFO] Detected segmentation mask in {os.path.basename(primary_path)}. Running fast 3D geometric analysis...")
+        results_dict, mask_array, spacing_zyx, f_cent, t_cent, p_info, vis_data = run_geometric_analysis_from_mask(sitk_img)
+        visualize_results(mask_array, spacing_zyx, vis_data)
+    elif secondary_path and os.path.exists(secondary_path):
+        # Secondary file might be mask
+        print(f"[INFO] Using secondary mask: {os.path.basename(secondary_path)}...")
+        results_dict, mask_array, spacing_zyx, f_cent, t_cent, p_info, vis_data = run_geometric_analysis_from_mask(secondary_path)
+        visualize_results(mask_array, spacing_zyx, vis_data)
+    else:
+        print(f"[INFO] Detected grayscale MRI volume in {os.path.basename(primary_path)}. Opening 3D Orthoslice Viewer...")
+        visualize_mri_volume(sitk_img, title=f"MRI Volume: {os.path.basename(primary_path)}")
+

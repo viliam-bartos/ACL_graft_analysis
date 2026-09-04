@@ -9,31 +9,40 @@ import subprocess
 from pathlib import Path
 
 CURRENT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = CURRENT_DIR.parent.parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.append(str(CURRENT_DIR))
-
+if str(CURRENT_DIR.parent) not in sys.path:
+    sys.path.append(str(CURRENT_DIR.parent))
 
 class DummyWriter:
-    def write(self, x):
-        pass
-
-    def flush(self):
-        pass
-
+    def write(self, x): pass
+    def flush(self): pass
 
 if sys.stdout is None:
     sys.stdout = DummyWriter()
 if sys.stderr is None:
     sys.stderr = DummyWriter()
 
-import tkinter as tk  # noqa: E402
-from tkinter import filedialog, messagebox  # noqa: E402
-import customtkinter as ctk  # noqa: E402
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import customtkinter as ctk
+
+# ── Color Palette (Medical Dark Cyberpunk / Modern Clinical) ─────────
+ACCENT_CYAN = "#06b6d4"       # Primary 3D & Action
+ACCENT_CYAN_HOVER = "#0891b2"
+ACCENT_GREEN = "#10b981"      # Run & Success
+ACCENT_GREEN_HOVER = "#059669"
+BG_CARD = "#1e293b"           # Slate-800
+BG_CARD_LIGHT = "#334155"     # Slate-700
+BG_INPUT = "#0f172a"          # Slate-900
+TEXT_MAIN = "#f8fafc"
+TEXT_MUTED = "#94a3b8"
+BORDER_COLOR = "#475569"
 
 
 class TextboxHandler(logging.Handler):
-    """Logging handler that appends to a CTk textbox."""
-
+    """Logging handler that writes to a CTk textbox in a thread-safe manner."""
     def __init__(self, textbox):
         super().__init__()
         self.textbox = textbox
@@ -41,56 +50,58 @@ class TextboxHandler(logging.Handler):
     def emit(self, record):
         msg = self.format(record)
 
-        if "Resampling" in msg or "Reorienting" in msg or "Histogram matching" in msg:
-            return
-
         def append():
-            self.textbox.configure(state="normal")
-            self.textbox.insert(tk.END, msg + "\n")
-            self.textbox.see(tk.END)
-            self.textbox.configure(state="disabled")
+            try:
+                self.textbox.configure(state="normal")
+                self.textbox.insert(tk.END, msg + "\n")
+                self.textbox.see(tk.END)
+                self.textbox.configure(state="disabled")
+            except Exception:
+                pass
 
         self.textbox.after(0, append)
 
 
-# ── Color Palette ───────────────────────────────────────────────────
-ACCENT = "#1abc9c"
-ACCENT_HOVER = "#16a085"
-SUCCESS = "#27ae60"
-SUCCESS_HOVER = "#219a52"
-
-
-# ── Main Application ────────────────────────────────────────────────
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("ACL Graft Analysis")
-        self.geometry("1100x750")
-        self.minsize(900, 600)
+        self.title("ACL Graft Analysis & 3D Geometric Visualizer")
+        self.geometry("1180x820")
+        self.minsize(980, 680)
 
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
 
-        self.font_title = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
-        self.font_body = ctk.CTkFont(family="Segoe UI", size=13)
+        # Typography
+        self.font_h1 = ctk.CTkFont(family="Segoe UI", size=18, weight="bold")
+        self.font_title = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
+        self.font_body = ctk.CTkFont(family="Segoe UI", size=12)
+        self.font_body_bold = ctk.CTkFont(family="Segoe UI", size=12, weight="bold")
         self.font_small = ctk.CTkFont(family="Segoe UI", size=11)
-        self.font_button = ctk.CTkFont(family="Segoe UI", size=13, weight="bold")
-        self.font_run = ctk.CTkFont(family="Segoe UI", size=16, weight="bold")
+        self.font_mono = ctk.CTkFont(family="Consolas", size=11)
+        self.font_btn = ctk.CTkFont(family="Segoe UI", size=13, weight="bold")
+        self.font_btn_lg = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
 
         self.config_file = os.path.join(CURRENT_DIR, "gui_config.json")
         self.load_settings()
 
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
+        self.build_header()
+
+        # Tabview
         self.tabview = ctk.CTkTabview(self, corner_radius=10)
-        self.tabview.grid(row=0, column=0, padx=15, pady=15, sticky="nsew")
+        self.tabview.grid(row=1, column=0, padx=15, pady=(0, 15), sticky="nsew")
 
-        self.tab_process = self.tabview.add("Processing")
-        self.tab_dashboard = self.tabview.add("Dashboard")
-        self.tab_settings = self.tabview.add("Settings")
+        # Order: 3D Viewer FIRST (user priority), then Pipeline, Results, Settings
+        self.tab_viewer = self.tabview.add("🚀 3D Prohlížeč (PyVista)")
+        self.tab_process = self.tabview.add("⚡ Dávková Analýza")
+        self.tab_dashboard = self.tabview.add("📊 Výsledky & Případy")
+        self.tab_settings = self.tabview.add("⚙ Nastavení")
 
+        self.build_viewer_tab()
         self.build_process_tab()
         self.build_dashboard_tab()
         self.build_settings_tab()
@@ -98,13 +109,29 @@ class App(ctk.CTk):
         self.processing_thread = None
         self.setup_gui_logging()
 
+        # Pre-warm modules in background so there is zero import delay on click!
+        threading.Thread(target=self._prewarm_engines, daemon=True).start()
+
+        # Auto-check reference data on launch
+        self.after(300, self._auto_detect_project_data)
+
+    def _prewarm_engines(self):
+        """Asynchronously load visualizer and analysis modules in memory at startup."""
+        try:
+            import SimpleITK
+            import pyvista
+            from anaknee import visualizator_analyzator
+            from anaknee import main_acl_analysis
+            self.after(0, lambda: self.lbl_global_status.configure(text="● Připraveno (Bleskový režim aktivní)", text_color=ACCENT_GREEN))
+        except Exception as e:
+            logging.debug(f"Pre-warm note: {e}")
 
     def load_settings(self):
         self.settings = {
-            "anaknee_ref_mri": r"Data\Reference\reference.nii.gz",
-            "model_ckpt": r"Weights\model.pth",
-            "ensemble_dir": r"Data\5CV",
-            "gt_masks_dir": r"Data\GT",
+            "anaknee_ref_mri": os.path.join(str(ROOT_DIR), "Data", "reference", "right_case_074.nii.gz"),
+            "model_ckpt": os.path.join(str(ROOT_DIR), "Weights", "model.pth"),
+            "ensemble_dir": os.path.join(str(ROOT_DIR), "Data", "5CV"),
+            "gt_masks_dir": os.path.join(str(ROOT_DIR), "Data", "GT"),
         }
         if os.path.exists(self.config_file):
             try:
@@ -128,221 +155,434 @@ class App(ctk.CTk):
         self.log_handler.setFormatter(formatter)
         logging.getLogger().addHandler(self.log_handler)
 
-    # ── Processing Tab ──────────────────────────────────────────────
+    # ── Top Header Bar ──────────────────────────────────────────────
+    def build_header(self):
+        header = ctk.CTkFrame(self, fg_color="transparent", height=45)
+        header.grid(row=0, column=0, padx=20, pady=(12, 6), sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
 
+        title_frame = ctk.CTkFrame(header, fg_color="transparent")
+        title_frame.grid(row=0, column=0, sticky="w")
+
+        ctk.CTkLabel(
+            title_frame, text="🦵 ACL GRAFT ANALYSIS",
+            font=self.font_h1, text_color=TEXT_MAIN
+        ).pack(side="left", padx=(0, 10))
+
+        ctk.CTkLabel(
+            title_frame, text="|  3D Segmentace & Biomechanika Kolene",
+            font=self.font_body, text_color=TEXT_MUTED
+        ).pack(side="left")
+
+        # Right status badge
+        self.lbl_global_status = ctk.CTkLabel(
+            header, text="● Připraveno",
+            font=self.font_small, text_color=ACCENT_GREEN
+        )
+        self.lbl_global_status.grid(row=0, column=1, sticky="e", padx=5)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 1: 🚀 3D PROHLÍŽEČ (PYVISTA) — HLAVNÍ POŽADAVEK UŽIVATELE
+    # ═══════════════════════════════════════════════════════════════════
+    def build_viewer_tab(self):
+        self.tab_viewer.grid_columnconfigure(0, weight=1)
+        self.tab_viewer.grid_rowconfigure(2, weight=1)
+
+        # ── Karta 1: Výběr objemu ───────────────────────────────────
+        card_sel = ctk.CTkFrame(self.tab_viewer, fg_color=BG_CARD, corner_radius=10)
+        card_sel.grid(row=0, column=0, padx=12, pady=(10, 6), sticky="ew")
+        card_sel.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            card_sel, text="📂 Výběr objemu k 3D zobrazení",
+            font=self.font_title, text_color=ACCENT_CYAN
+        ).grid(row=0, column=0, columnspan=3, padx=15, pady=(12, 8), sticky="w")
+
+        # Primární soubor (Maska nebo MRI sken)
+        self.viz_primary_var = ctk.StringVar()
+        self.viz_secondary_var = ctk.StringVar()
+
+        ctk.CTkLabel(
+            card_sel, text="Hlavní objem (NIfTI / DICOM):", font=self.font_body_bold
+        ).grid(row=1, column=0, padx=(15, 8), pady=6, sticky="e")
+
+        self.entry_primary = ctk.CTkEntry(
+            card_sel, textvariable=self.viz_primary_var, font=self.font_small,
+            fg_color=BG_INPUT, border_color=BORDER_COLOR,
+            placeholder_text="Vyberte segmentační masku (mask_*.nii.gz) nebo libovolný MRI sken (.nii, .nii.gz, .dcm)..."
+        )
+        self.entry_primary.grid(row=1, column=1, padx=6, pady=6, sticky="ew")
+
+        ctk.CTkButton(
+            card_sel, text="Procházet...", width=95, font=self.font_body,
+            fg_color=ACCENT_CYAN, hover_color=ACCENT_CYAN_HOVER,
+            command=self._browse_viz_primary
+        ).grid(row=1, column=2, padx=(6, 15), pady=6)
+
+        # Volitelný doplňkový soubor (kontext)
+        ctk.CTkLabel(
+            card_sel, text="Doplňková maska / MRI (volitelné):", font=self.font_body
+        ).grid(row=2, column=0, padx=(15, 8), pady=6, sticky="e")
+
+        self.entry_secondary = ctk.CTkEntry(
+            card_sel, textvariable=self.viz_secondary_var, font=self.font_small,
+            fg_color=BG_INPUT, border_color=BORDER_COLOR,
+            placeholder_text="Volitelné: doplňkový MRI sken k masce nebo maska k MRI..."
+        )
+        self.entry_secondary.grid(row=2, column=1, padx=6, pady=6, sticky="ew")
+
+        ctk.CTkButton(
+            card_sel, text="Procházet...", width=95, font=self.font_body,
+            fg_color="gray30", hover_color="gray40",
+            command=self._browse_viz_secondary
+        ).grid(row=2, column=2, padx=(6, 15), pady=6)
+
+        # ── Rychlé předvolby (1-klik načtení) ────────────────────────
+        preset_frame = ctk.CTkFrame(card_sel, fg_color="transparent")
+        preset_frame.grid(row=3, column=0, columnspan=3, padx=15, pady=(8, 12), sticky="w")
+
+        ctk.CTkLabel(preset_frame, text="⚡ Rychlé načtení z projektu:", font=self.font_small, text_color=TEXT_MUTED).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            preset_frame, text="📁 Referenční maska (074)", font=self.font_small, height=28,
+            fg_color=BG_CARD_LIGHT, hover_color=BORDER_COLOR,
+            command=self._load_preset_mask
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            preset_frame, text="📁 Referenční MRI sken", font=self.font_small, height=28,
+            fg_color=BG_CARD_LIGHT, hover_color=BORDER_COLOR,
+            command=self._load_preset_mri
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            preset_frame, text="📁 Poslední výsledek", font=self.font_small, height=28,
+            fg_color=BG_CARD_LIGHT, hover_color=BORDER_COLOR,
+            command=self._load_preset_latest
+        ).pack(side="left", padx=4)
+
+        # ── Karta 2: Detekce & Spuštění ──────────────────────────────
+        card_launch = ctk.CTkFrame(self.tab_viewer, fg_color=BG_CARD, corner_radius=10)
+        card_launch.grid(row=1, column=0, padx=12, pady=6, sticky="ew")
+        card_launch.grid_columnconfigure(0, weight=1)
+
+        # Dynamický detekční banner
+        self.lbl_detection_badge = ctk.CTkLabel(
+            card_launch,
+            text="ℹ Zadejte nebo vyberte soubor výše pro okamžité 3D zobrazení.",
+            font=self.font_body, text_color=TEXT_MUTED, anchor="w", justify="left"
+        )
+        self.lbl_detection_badge.grid(row=0, column=0, padx=15, pady=(12, 6), sticky="ew")
+
+        # Volba rychlého režimu
+        self.chk_fast_mode_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            card_launch,
+            text="Bleskový režim geometrie (výpočet za ~1,5 s, přeskočí zdlouhavou radiomiku)",
+            variable=self.chk_fast_mode_var,
+            font=self.font_small, text_color=TEXT_MAIN
+        ).grid(row=1, column=0, padx=15, pady=4, sticky="w")
+
+        # Hlavní spouštěcí tlačítko
+        btn_action_frame = ctk.CTkFrame(card_launch, fg_color="transparent")
+        btn_action_frame.grid(row=2, column=0, padx=15, pady=(10, 14), sticky="ew")
+        btn_action_frame.grid_columnconfigure(0, weight=1)
+
+        self.btn_launch_3d = ctk.CTkButton(
+            btn_action_frame, text="▶  OTEVŘÍT V PYVISTA 3D", font=self.font_btn_lg,
+            fg_color=ACCENT_CYAN, hover_color=ACCENT_CYAN_HOVER, height=48,
+            corner_radius=8, command=self.action_launch_pyvista
+        )
+        self.btn_launch_3d.grid(row=0, column=0, sticky="ew")
+
+        # ── Karta 3: Přehled metrik po zobrazení ──────────────────────
+        self.card_metrics_preview = ctk.CTkFrame(self.tab_viewer, fg_color=BG_CARD, corner_radius=10)
+        self.card_metrics_preview.grid(row=2, column=0, padx=12, pady=(6, 12), sticky="nsew")
+        self.card_metrics_preview.grid_columnconfigure((0, 1, 2, 3), weight=1)
+
+        ctk.CTkLabel(
+            self.card_metrics_preview, text="📊 Rychlý náhled biomechanických parametrů",
+            font=self.font_title, text_color=TEXT_MAIN
+        ).grid(row=0, column=0, columnspan=4, padx=15, pady=(12, 6), sticky="w")
+
+        # 4 boxíky metrik
+        self.metric_boxes = {}
+        metric_defs = [
+            ("att", "ATT (mm)", "0.0 mm", "Přední posun tibie"),
+            ("staubli", "Stäubli Tibia", "0.0 %", "AP pozice úponu (norma 40-44%)"),
+            ("elevation", "Úhel plata", "0.0°", "Sklon vazu k tibiálnímu platu"),
+            ("bh_len", "B&H Délka", "0.0 %", "Femorální úpon v mřížce"),
+        ]
+        for col, (m_id, label, default_val, desc) in enumerate(metric_defs):
+            b_frame = ctk.CTkFrame(self.card_metrics_preview, fg_color=BG_INPUT, corner_radius=8)
+            b_frame.grid(row=1, column=col, padx=8, pady=8, sticky="nsew")
+            ctk.CTkLabel(b_frame, text=label, font=self.font_small, text_color=TEXT_MUTED).pack(pady=(6, 2))
+            val_lbl = ctk.CTkLabel(b_frame, text=default_val, font=self.font_h1, text_color=ACCENT_CYAN)
+            val_lbl.pack(pady=(0, 2))
+            ctk.CTkLabel(b_frame, text=desc, font=ctk.CTkFont(size=9), text_color="gray50").pack(pady=(0, 6))
+            self.metric_boxes[m_id] = val_lbl
+
+        self.lbl_viewer_status = ctk.CTkLabel(
+            self.card_metrics_preview,
+            text="Prohlížeč připraven. Po otevření PyVista se okno zobrazí v plném 3D s interaktivními vrstvami.",
+            font=self.font_small, text_color=TEXT_MUTED
+        )
+        self.lbl_viewer_status.grid(row=2, column=0, columnspan=4, padx=15, pady=8, sticky="w")
+
+    def _browse_viz_primary(self):
+        path = filedialog.askopenfilename(
+            title="Vyberte objem (Maska nebo MRI sken)",
+            filetypes=[
+                ("Všechny podporované", "*.nii.gz *.nii *.dcm"),
+                ("NIfTI soubory", "*.nii.gz *.nii"),
+                ("DICOM", "*.dcm"),
+            ],
+        )
+        if path:
+            self.viz_primary_var.set(path)
+            self._update_detection_info(path)
+
+    def _browse_viz_secondary(self):
+        path = filedialog.askopenfilename(
+            title="Vyberte doplňkový soubor (maska nebo sken)",
+            filetypes=[
+                ("NIfTI soubory", "*.nii.gz *.nii"),
+                ("Všechny soubory", "*.*"),
+            ],
+        )
+        if path:
+            self.viz_secondary_var.set(path)
+
+    def _auto_detect_project_data(self):
+        """Preload paths if reference files exist in repository."""
+        ref_mask = os.path.join(ROOT_DIR, "Data", "reference", "vysledky_074", "mask_right_case_074.nii.gz")
+        if os.path.exists(ref_mask) and not self.viz_primary_var.get():
+            self.viz_primary_var.set(ref_mask)
+            self._update_detection_info(ref_mask)
+
+    def _load_preset_mask(self):
+        p = os.path.join(ROOT_DIR, "Data", "reference", "vysledky_074", "mask_right_case_074.nii.gz")
+        if os.path.exists(p):
+            self.viz_primary_var.set(p)
+            self._update_detection_info(p)
+        else:
+            messagebox.showinfo("Informace", f"Referenční maska nebyla nalezena v:\n{p}")
+
+    def _load_preset_mri(self):
+        p = os.path.join(ROOT_DIR, "Data", "reference", "right_case_074.nii.gz")
+        if os.path.exists(p):
+            self.viz_primary_var.set(p)
+            self._update_detection_info(p)
+        else:
+            messagebox.showinfo("Informace", f"Referenční MRI sken nebyl nalezen v:\n{p}")
+
+    def _load_preset_latest(self):
+        # Look in Data/reference/Results or output folders
+        candidates = glob.glob(os.path.join(ROOT_DIR, "Data", "**", "mask_*.nii*"), recursive=True)
+        if candidates:
+            latest = sorted(candidates, key=os.path.getmtime)[-1]
+            self.viz_primary_var.set(latest)
+            self._update_detection_info(latest)
+        else:
+            messagebox.showinfo("Informace", "Zatím nebyly nalezeny žádné vytvořené masky.")
+
+    def _update_detection_info(self, path):
+        fname = os.path.basename(path).lower()
+        if "mask" in fname:
+            self.lbl_detection_badge.configure(
+                text="🟢 Detekována SEGMENTAČNÍ MASKA (Femur, Tibia, ACL) → Plná 3D anatomie s RANSAC platem a úhly.",
+                text_color=ACCENT_GREEN
+            )
+        else:
+            self.lbl_detection_badge.configure(
+                text="🔵 Detekován MRI OBJEM (Intenzitní sken) → 3D ortogonální řezy (Axial, Coronal, Sagittal) v PyVista.",
+                text_color=ACCENT_CYAN
+            )
+
+    def action_launch_pyvista(self):
+        primary = self.viz_primary_var.get().strip()
+        secondary = self.viz_secondary_var.get().strip()
+
+        if not primary or not os.path.exists(primary):
+            messagebox.showerror("Chyba", "Vyberte prosím platný soubor k zobrazení.")
+            return
+
+        self.btn_launch_3d.configure(state="disabled", text="⏳  ZPRACOVÁVÁM...")
+        self.lbl_viewer_status.configure(text=f"⏳ [1/4] Spouštím analýzu: {os.path.basename(primary)}...", text_color=ACCENT_CYAN)
+        self.update_idletasks()
+
+        def worker():
+            try:
+                from anaknee.visualizator_analyzator import smart_visualize, visualize_results, visualize_mri_volume
+                import SimpleITK as sitk
+                import numpy as np
+
+                fname = os.path.basename(primary).lower()
+                is_mask = "mask" in fname
+
+                def on_progress(step_text):
+                    self.after(0, lambda: self.lbl_viewer_status.configure(text=f"⏳ {step_text}", text_color=ACCENT_CYAN))
+
+                if is_mask or (secondary and "mask" in secondary.lower()):
+                    mask_to_use = primary if is_mask else secondary
+                    from anaknee.main_acl_analysis import run_geometric_analysis_from_mask
+                    res_dict, mask_array, spacing_zyx, f_cent, t_cent, p_info, vis_data = run_geometric_analysis_from_mask(
+                        mask_to_use, progress_callback=on_progress
+                    )
+
+                    on_progress("[4/4] Generování 3D polygonálních sítí v PyVista...")
+
+                    # Update metric cards
+                    def update_ui_metrics():
+                        self.metric_boxes["att"].configure(text=f"{res_dict.get('ATT_mm', 0):.2f} mm")
+                        self.metric_boxes["staubli"].configure(text=f"{res_dict.get('Staubli_Tibial_pct', 0):.1f} %")
+                        self.metric_boxes["elevation"].configure(text=f"{res_dict.get('angle_to_plateau_deg', 0):.1f}°")
+                        self.metric_boxes["bh_len"].configure(text=f"{res_dict.get('BH_Length_pct', 0):.1f} %")
+                        self.lbl_viewer_status.configure(
+                            text=f"✓ 3D model otevřen! [Inliers plata: {len(vis_data.get('plateau_inliers') or [])}]",
+                            text_color=ACCENT_GREEN
+                        )
+                    self.after(0, update_ui_metrics)
+
+                    # Open PyVista
+                    visualize_results(mask_array, spacing_zyx, vis_data)
+                else:
+                    # Grayscale MRI volume
+                    on_progress("Načítám 3D ortogonální řezy MRI skenu...")
+                    def update_ui_vol():
+                        self.lbl_viewer_status.configure(
+                            text=f"✓ 3D MRI Prohlížeč řezů otevřen pro {os.path.basename(primary)}.",
+                            text_color=ACCENT_CYAN
+                        )
+                    self.after(0, update_ui_vol)
+                    visualize_mri_volume(primary)
+
+            except Exception as e:
+                traceback.print_exc()
+                self.after(0, lambda: messagebox.showerror("Chyba vizualizace", f"Nepodařilo se spustit 3D zobrazení:\n{e}"))
+            finally:
+                self.after(0, lambda: self.btn_launch_3d.configure(state="normal", text="▶  OTEVŘÍT V PYVISTA 3D"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 2: ⚡ DÁVKOVÁ ANALÝZA (PIPELINE)
+    # ═══════════════════════════════════════════════════════════════════
     def build_process_tab(self):
         self.tab_process.grid_columnconfigure(0, weight=1)
 
-        frame_mode = ctk.CTkFrame(self.tab_process, corner_radius=8)
-        frame_mode.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="ew")
+        # Karta: Vstup a výstup
+        card_io = ctk.CTkFrame(self.tab_process, fg_color=BG_CARD, corner_radius=10)
+        card_io.grid(row=0, column=0, padx=12, pady=(10, 6), sticky="ew")
+        card_io.grid_columnconfigure(1, weight=1)
 
+        ctk.CTkLabel(card_io, text="📁 Vstupní a výstupní cesty", font=self.font_title, text_color=TEXT_MAIN).grid(row=0, column=0, columnspan=3, padx=15, pady=(12, 6), sticky="w")
+
+        # Mode radio buttons
         self.mode_var = ctk.StringVar(value="FILE")
+        mode_frame = ctk.CTkFrame(card_io, fg_color="transparent")
+        mode_frame.grid(row=1, column=0, columnspan=3, padx=15, pady=4, sticky="w")
+        ctk.CTkLabel(mode_frame, text="Režim:", font=self.font_body_bold).pack(side="left", padx=(0, 10))
+        ctk.CTkRadioButton(mode_frame, text="Jednotlivý soubor", variable=self.mode_var, value="FILE", font=self.font_body).pack(side="left", padx=10)
+        ctk.CTkRadioButton(mode_frame, text="Složka pacienta (dávka / DICOM)", variable=self.mode_var, value="FOLDER", font=self.font_body).pack(side="left", padx=10)
 
-        ctk.CTkLabel(
-            frame_mode, text="Mode:", font=self.font_title
-        ).pack(side="left", padx=(15, 10), pady=10)
-        ctk.CTkRadioButton(
-            frame_mode, text="Single File", variable=self.mode_var,
-            value="FILE", font=self.font_body, command=self.update_mode_ui,
-        ).pack(side="left", padx=10)
-        ctk.CTkRadioButton(
-            frame_mode, text="Patient Folder", variable=self.mode_var,
-            value="FOLDER", font=self.font_body, command=self.update_mode_ui,
-        ).pack(side="left", padx=10)
-
-        frame_paths = ctk.CTkFrame(self.tab_process, corner_radius=8)
-        frame_paths.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
-        frame_paths.grid_columnconfigure(1, weight=1)
-
+        # Input / Output entries
         self.input_var = ctk.StringVar()
         self.output_var = ctk.StringVar()
 
-        ctk.CTkLabel(
-            frame_paths, text="Input:", font=self.font_body
-        ).grid(row=0, column=0, padx=(15, 5), pady=8, sticky="e")
-        ctk.CTkEntry(
-            frame_paths, textvariable=self.input_var, font=self.font_small,
-            placeholder_text="NIfTI file, DICOM file, or folder...",
-        ).grid(row=0, column=1, padx=5, pady=8, sticky="ew")
-        ctk.CTkButton(
-            frame_paths, text="Browse", width=80, font=self.font_body,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.browse_input,
-        ).grid(row=0, column=2, padx=(5, 15), pady=8)
+        ctk.CTkLabel(card_io, text="Vstup:", font=self.font_body).grid(row=2, column=0, padx=(15, 6), pady=6, sticky="e")
+        ctk.CTkEntry(card_io, textvariable=self.input_var, font=self.font_small, fg_color=BG_INPUT, border_color=BORDER_COLOR, placeholder_text="Cesta k NIfTI nebo DICOM souboru/složce...").grid(row=2, column=1, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(card_io, text="Procházet...", width=95, font=self.font_body, fg_color=ACCENT_CYAN, hover_color=ACCENT_CYAN_HOVER, command=self.browse_input).grid(row=2, column=2, padx=(6, 15), pady=6)
 
-        ctk.CTkLabel(
-            frame_paths, text="Output:", font=self.font_body
-        ).grid(row=1, column=0, padx=(15, 5), pady=8, sticky="e")
-        ctk.CTkEntry(
-            frame_paths, textvariable=self.output_var, font=self.font_small,
-            placeholder_text="Auto-filled when input is selected...",
-        ).grid(row=1, column=1, padx=5, pady=8, sticky="ew")
-        ctk.CTkButton(
-            frame_paths, text="Browse", width=80, font=self.font_body,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.browse_output,
-        ).grid(row=1, column=2, padx=(5, 15), pady=8)
+        ctk.CTkLabel(card_io, text="Výstup:", font=self.font_body).grid(row=3, column=0, padx=(15, 6), pady=6, sticky="e")
+        ctk.CTkEntry(card_io, textvariable=self.output_var, font=self.font_small, fg_color=BG_INPUT, border_color=BORDER_COLOR, placeholder_text="Cesta k výsledné složce (např. Data/Results)...").grid(row=3, column=1, padx=6, pady=6, sticky="ew")
+        ctk.CTkButton(card_io, text="Procházet...", width=95, font=self.font_body, fg_color="gray30", hover_color="gray40", command=self.browse_output).grid(row=3, column=2, padx=(6, 15), pady=(6, 14))
 
-        frame_modules = ctk.CTkFrame(self.tab_process, corner_radius=8)
-        frame_modules.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
+        # Karta: Moduly analýzy
+        card_mod = ctk.CTkFrame(self.tab_process, fg_color=BG_CARD, corner_radius=10)
+        card_mod.grid(row=1, column=0, padx=12, pady=6, sticky="ew")
 
-        ctk.CTkLabel(
-            frame_modules, text="Modules:", font=self.font_title
-        ).pack(side="left", padx=(15, 10), pady=10)
+        ctk.CTkLabel(card_mod, text="⚙ Volby pipeline", font=self.font_title, text_color=TEXT_MAIN).pack(anchor="w", padx=15, pady=(10, 4))
+
+        opt_frame = ctk.CTkFrame(card_mod, fg_color="transparent")
+        opt_frame.pack(fill="x", padx=15, pady=(0, 10))
 
         self.chk_inference_var = ctk.IntVar(value=1)
         self.chk_anatomy_var = ctk.IntVar(value=1)
-        self.chk_seg_var = ctk.IntVar(value=0)
+        self.chk_radiomics_var = ctk.IntVar(value=0)  # Off by default for 10x speedup!
+        self.chk_autoviz_var = ctk.IntVar(value=1)
 
-        ctk.CTkCheckBox(
-            frame_modules, text="AI Segmentation",
-            variable=self.chk_inference_var, font=self.font_body,
-        ).pack(side="left", padx=12, pady=10)
-        ctk.CTkCheckBox(
-            frame_modules, text="Anatomical Analysis",
-            variable=self.chk_anatomy_var, font=self.font_body,
-        ).pack(side="left", padx=12, pady=10)
-        ctk.CTkCheckBox(
-            frame_modules, text="Compare with GT",
-            variable=self.chk_seg_var, font=self.font_body,
-        ).pack(side="left", padx=12, pady=10)
+        ctk.CTkCheckBox(opt_frame, text="AI Segmentace (LightUNet3D)", variable=self.chk_inference_var, font=self.font_body).pack(side="left", padx=10, pady=4)
+        ctk.CTkCheckBox(opt_frame, text="Geometrická analýza (Anaknee)", variable=self.chk_anatomy_var, font=self.font_body).pack(side="left", padx=10, pady=4)
+        ctk.CTkCheckBox(opt_frame, text="PyRadiomics (pomalé)", variable=self.chk_radiomics_var, font=self.font_body).pack(side="left", padx=10, pady=4)
+        ctk.CTkCheckBox(opt_frame, text="Otevřít 3D po dokončení", variable=self.chk_autoviz_var, font=self.font_body).pack(side="left", padx=10, pady=4)
 
-        frame_run = ctk.CTkFrame(
-            self.tab_process, corner_radius=8, fg_color="transparent"
-        )
-        frame_run.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
-        frame_run.grid_columnconfigure(0, weight=1)
+        # Spouštěcí karta
+        card_run = ctk.CTkFrame(self.tab_process, fg_color="transparent")
+        card_run.grid(row=2, column=0, padx=12, pady=6, sticky="ew")
+        card_run.grid_columnconfigure(0, weight=1)
 
         self.btn_run = ctk.CTkButton(
-            frame_run, text="\u25b6  RUN ANALYSIS", font=self.font_run,
-            fg_color=SUCCESS, hover_color=SUCCESS_HOVER, height=45,
-            corner_radius=8, command=self.start_processing,
+            card_run, text="▶  SPUSTIT ANALÝZU PIPELINE", font=self.font_btn_lg,
+            fg_color=ACCENT_GREEN, hover_color=ACCENT_GREEN_HOVER, height=46,
+            corner_radius=8, command=self.start_processing
         )
-        self.btn_run.grid(row=0, column=0, padx=0, pady=(5, 2), sticky="ew")
+        self.btn_run.grid(row=0, column=0, sticky="ew", pady=(2, 4))
 
-        self.progress = ctk.CTkProgressBar(frame_run, height=4, corner_radius=2)
-        self.progress.grid(row=1, column=0, padx=0, pady=(0, 5), sticky="ew")
+        self.progress = ctk.CTkProgressBar(card_run, height=6, corner_radius=3)
+        self.progress.grid(row=1, column=0, sticky="ew", pady=(2, 6))
         self.progress.set(0)
 
+        # Log textbox
         self.log_textbox = ctk.CTkTextbox(
-            self.tab_process, height=200, font=self.font_small,
-            corner_radius=8, state="disabled",
+            self.tab_process, height=180, font=self.font_mono,
+            fg_color=BG_CARD, corner_radius=8, state="disabled"
         )
-        self.log_textbox.grid(row=4, column=0, padx=10, pady=(5, 10), sticky="nsew")
-
-        self.tab_process.grid_rowconfigure(4, weight=1)
-
-    def update_mode_ui(self):
-        self.input_var.set("")
-        self.output_var.set("")
+        self.log_textbox.grid(row=3, column=0, padx=12, pady=(6, 12), sticky="nsew")
+        self.tab_process.grid_rowconfigure(3, weight=1)
 
     def browse_input(self):
         if self.mode_var.get() == "FILE":
             path = filedialog.askopenfilename(
-                title="Select MRI file",
+                title="Vyberte MRI soubor",
                 filetypes=[
-                    ("All Supported", "*.nii.gz *.nii *.dcm"),
+                    ("Všechny podporované", "*.nii.gz *.nii *.dcm"),
                     ("NIfTI", "*.nii.gz *.nii"),
                     ("DICOM", "*.dcm"),
                 ],
             )
         else:
-            path = filedialog.askdirectory(title="Select patient folder")
+            path = filedialog.askdirectory(title="Vyberte složku pacienta / DICOM sérii")
         if path:
             self.input_var.set(path)
             self._auto_suggest_output(path)
 
     def browse_output(self):
-        path = filedialog.askdirectory(title="Select output folder")
+        path = filedialog.askdirectory(title="Vyberte výstupní složku")
         if path:
             self.output_var.set(path)
 
     def _auto_suggest_output(self, input_path):
-        """Auto-fill output if empty."""
         if self.output_var.get():
             return
-        if os.path.isfile(input_path):
-            parent = os.path.dirname(input_path)
-        else:
-            parent = input_path
+        parent = os.path.dirname(input_path) if os.path.isfile(input_path) else input_path
         self.output_var.set(os.path.join(parent, "Results"))
-
-    # ── Laterality Prompt ───────────────────────────────────────────
-
-    def ask_laterality(self, filename):
-        """Thread-safe laterality dialog. Blocks worker until user responds."""
-        result = {"value": "Left"}
-        event = threading.Event()
-
-        def show_dialog():
-            dialog = ctk.CTkToplevel(self)
-            dialog.title("Knee Laterality")
-            dialog.geometry("420x220")
-            dialog.resizable(False, False)
-            dialog.transient(self)
-            dialog.grab_set()
-            dialog.lift()
-            dialog.focus_force()
-
-            self.update_idletasks()
-            x = self.winfo_x() + (self.winfo_width() - 420) // 2
-            y = self.winfo_y() + (self.winfo_height() - 220) // 2
-            dialog.geometry(f"+{x}+{y}")
-
-            ctk.CTkLabel(
-                dialog, text="Laterality Not Detected",
-                font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"),
-            ).pack(pady=(20, 5))
-
-            ctk.CTkLabel(
-                dialog,
-                text=f"File: {filename}\n\nIs this a left or right knee?",
-                font=ctk.CTkFont(family="Segoe UI", size=13),
-                wraplength=380,
-            ).pack(pady=(5, 15))
-
-            btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
-            btn_frame.pack(pady=10)
-
-            def choose(val):
-                result["value"] = val
-                event.set()
-                dialog.destroy()
-
-            ctk.CTkButton(
-                btn_frame, text="\u2b05  Left Knee", width=140, height=38,
-                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-                fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                command=lambda: choose("Left"),
-            ).pack(side="left", padx=10)
-            ctk.CTkButton(
-                btn_frame, text="Right Knee  \u27a1", width=140, height=38,
-                font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-                fg_color=ACCENT, hover_color=ACCENT_HOVER,
-                command=lambda: choose("Right"),
-            ).pack(side="left", padx=10)
-
-            dialog.protocol("WM_DELETE_WINDOW", lambda: choose("Left"))
-
-        self.after(0, show_dialog)
-        event.wait()
-        return result["value"]
-
-    # ── Processing Logic ────────────────────────────────────────────
 
     def start_processing(self):
         if self.processing_thread and self.processing_thread.is_alive():
-            messagebox.showwarning("Warning", "Analysis is already running!")
+            messagebox.showwarning("Upozornění", "Analýza již běží!")
             return
 
-        inp = self.input_var.get()
-        out = self.output_var.get()
+        inp = self.input_var.get().strip()
+        out = self.output_var.get().strip()
         if not inp:
-            messagebox.showerror("Error", "Please select an input file or folder.")
+            messagebox.showerror("Chyba", "Vyberte prosím vstupní soubor nebo složku.")
             return
         if not out:
-            messagebox.showerror("Error", "Please select an output folder.")
+            messagebox.showerror("Chyba", "Vyberte prosím výstupní složku.")
             return
 
-        self.btn_run.configure(state="disabled", text="\u23f3  PROCESSING...")
+        self.btn_run.configure(state="disabled", text="⏳  ZPRACOVÁVÁM...")
         self.progress.configure(mode="indeterminate")
         self.progress.start()
 
@@ -350,7 +590,6 @@ class App(ctk.CTk):
         self.log_textbox.delete("0.0", "end")
         self.log_textbox.configure(state="disabled")
 
-        # Gather config from UI (avoid heavy imports on main thread)
         self._thread_config = {
             "mode": self.mode_var.get(),
             "input_path": inp,
@@ -358,16 +597,14 @@ class App(ctk.CTk):
             "output_dir": out,
             "run_inference": self.chk_inference_var.get(),
             "run_anatomical_analysis": self.chk_anatomy_var.get(),
-            "run_segmentation_analysis": self.chk_seg_var.get(),
+            "compute_radiomics": bool(self.chk_radiomics_var.get()),
             "anaknee_ref_mri": self.settings["anaknee_ref_mri"],
             "model_ckpt": self.settings["model_ckpt"],
             "ensemble_dir": self.settings["ensemble_dir"],
             "gt_masks_dir": self.settings["gt_masks_dir"],
         }
 
-        self.processing_thread = threading.Thread(
-            target=self.run_pipeline_thread, daemon=True
-        )
+        self.processing_thread = threading.Thread(target=self.run_pipeline_thread, daemon=True)
         self.processing_thread.start()
 
     def run_pipeline_thread(self):
@@ -376,86 +613,39 @@ class App(ctk.CTk):
             import pandas as pd
             import torch
         except ImportError as e:
-            self.after(
-                0,
-                lambda: messagebox.showerror(
-                    "Import Error", f"Missing dependency:\n{e}"
-                ),
-            )
+            self.after(0, lambda: messagebox.showerror("Chyba importu", f"Chybí závislost:\n{e}"))
             return
 
-        # Apply UI config to pipeline
         for key, val in self._thread_config.items():
             mri_pipeline.CONFIG[key] = val
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         try:
-            mri_pipeline.setup_logging(
-                mri_pipeline.CONFIG["output_dir"], "pipeline.log"
-            )
+            mri_pipeline.setup_logging(mri_pipeline.CONFIG["output_dir"], "pipeline.log")
             logging.getLogger().addHandler(self.log_handler)
-
-            logging.info(f"==== Analysis started (Device: {device}) ====")
+            logging.info(f"==== Analýza spuštěna (Zařízení: {device}) ====")
 
             model = None
             ensemble_models = []
 
             if mri_pipeline.CONFIG["run_inference"]:
-                if mri_pipeline.CONFIG.get("use_ensemble", False):
-                    logging.info("Loading ensemble models...")
-                    ensemble_models = mri_pipeline._load_ensemble_models(
-                        mri_pipeline.CONFIG, device
-                    )
-                    if not ensemble_models:
-                        mri_pipeline.CONFIG["use_ensemble"] = False
-
-                if not mri_pipeline.CONFIG.get("use_ensemble", False):
-                    try:
-                        from blackwell.unets import LightUNet3D
-
-                        model = LightUNet3D(
-                            in_ch=1, out_ch=4,
-                            base=mri_pipeline.CONFIG["base_filters"],
-                        )
-                        ckpt = mri_pipeline.CONFIG["model_ckpt"]
-                        if os.path.exists(ckpt):
-                            model.load_state_dict(
-                                torch.load(ckpt, map_location=device)
-                            )
-                            model.to(device)
-                            logging.info("Single model loaded.")
-                        else:
-                            logging.warning(f"Model checkpoint not found: {ckpt}")
-                            model = None
-                    except Exception as e:
-                        logging.error(f"Could not load model: {e}")
-                        model = None
+                if mri_pipeline.CONFIG.get("use_ensemble", True):
+                    logging.info("Načítám 5-Fold ansámbl modelů...")
+                    ensemble_models = mri_pipeline._load_ensemble_models(mri_pipeline.CONFIG, device)
 
             inp = mri_pipeline.CONFIG["input_path"]
             out = mri_pipeline.CONFIG["output_dir"]
+            os.makedirs(out, exist_ok=True)
             results_list = []
-
-            files_to_process = []
 
             if mri_pipeline.CONFIG["mode"] == "FILE":
                 if mri_pipeline.is_dicom_input(inp):
-                    logging.info("DICOM input detected, converting to NIfTI...")
-                    nifti_paths = mri_pipeline.convert_dicom_to_nifti(inp, out)
-                    files_to_process = nifti_paths
+                    files_to_process = mri_pipeline.convert_dicom_to_nifti(inp, out)
                 else:
                     files_to_process = [inp]
-
-            elif mri_pipeline.CONFIG["mode"] == "FOLDER":
-                if mri_pipeline.is_dicom_input(inp):
-                    logging.info("DICOM folder detected, converting to NIfTI...")
-                    nifti_paths = mri_pipeline.convert_dicom_to_nifti(inp, out)
-                    files_to_process = nifti_paths
-                else:
-                    files_to_process = sorted(
-                        glob.glob(os.path.join(inp, "*.nii*"))
-                    )
-                    logging.info(f"Found {len(files_to_process)} NIfTI files.")
+            else:
+                files_to_process = sorted(glob.glob(os.path.join(inp, "*.nii*")))
 
             for f in files_to_process:
                 try:
@@ -463,197 +653,122 @@ class App(ctk.CTk):
                         f, model, device,
                         run_viz_at_end=False,
                         ensemble_models=ensemble_models,
-                        laterality_callback=self.ask_laterality,
+                        laterality_callback=lambda fn: "Right" if "right" in fn.lower() else "Left",
                     )
                     if res:
                         results_list.append(res)
                 except Exception as e:
-                    logging.error(f"Error processing {os.path.basename(f)}: {e}")
+                    logging.error(f"Chyba při zpracování {os.path.basename(f)}: {e}")
                     traceback.print_exc()
-
-            if (
-                mri_pipeline.CONFIG["mode"] == "FOLDER"
-                and mri_pipeline.CONFIG["run_segmentation_analysis"]
-            ):
-                mri_pipeline.perform_segmentation_analysis(
-                    out, mri_pipeline.CONFIG["gt_masks_dir"]
-                )
 
             csv_path = os.path.join(out, "patient_results.csv")
             if results_list:
                 df = pd.DataFrame(results_list)
                 if os.path.exists(csv_path):
                     df_old = pd.read_csv(csv_path)
-                    df = pd.concat([df_old, df]).drop_duplicates(
-                        subset=["Filename"], keep="last"
-                    )
+                    df = pd.concat([df_old, df]).drop_duplicates(subset=["Filename"], keep="last")
                 df.to_csv(csv_path, index=False)
-                logging.info(f"Results saved to: {csv_path}")
+                logging.info(f"Výsledky uloženy: {csv_path}")
 
-            logging.info("==== Analysis complete ====")
-
+            logging.info("==== Analýza dokončena ====")
             if os.path.exists(csv_path):
                 self.after(0, lambda: self.load_dashboard_data(csv_path))
 
-            n = len(results_list)
-            self.after(0, lambda: self.show_completion_summary(n, out))
+            # Auto-viz if requested
+            if self.chk_autoviz_var.get() and files_to_process:
+                first_file = files_to_process[0]
+                base_name = os.path.basename(first_file)
+                mask_path = os.path.join(out, f"mask_{base_name}")
+                if os.path.exists(mask_path):
+                    self.after(500, lambda mp=mask_path: self._auto_open_viz(mp))
 
         except Exception as e:
-            logging.error(f"Pipeline error: {e}")
-            traceback.print_exc()
-            self.after(
-                0,
-                lambda: messagebox.showerror("Error", f"Pipeline failed:\n{e}"),
-            )
+            logging.error(f"Chyba pipeline: {e}")
+            self.after(0, lambda: messagebox.showerror("Chyba", f"Chyba pipeline:\n{e}"))
         finally:
-
             def reset_ui():
-                self.btn_run.configure(
-                    state="normal", text="\u25b6  RUN ANALYSIS"
-                )
+                self.btn_run.configure(state="normal", text="▶  SPUSTIT ANALÝZU PIPELINE")
                 self.progress.stop()
                 self.progress.set(0)
-
             self.after(0, reset_ui)
 
-    # ── Completion Summary ──────────────────────────────────────────
+    def _auto_open_viz(self, mask_path):
+        self.viz_primary_var.set(mask_path)
+        self._update_detection_info(mask_path)
+        self.tabview.set("🚀 3D Prohlížeč (PyVista)")
+        self.action_launch_pyvista()
 
-    def show_completion_summary(self, num_files, output_dir):
-        """Post-processing summary with Open Folder button."""
-        dialog = ctk.CTkToplevel(self)
-        dialog.title("Analysis Complete")
-        dialog.geometry("450x250")
-        dialog.resizable(False, False)
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.lift()
-
-        self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() - 450) // 2
-        y = self.winfo_y() + (self.winfo_height() - 250) // 2
-        dialog.geometry(f"+{x}+{y}")
-
-        ctk.CTkLabel(
-            dialog, text="\u2705  Analysis Complete",
-            font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"),
-        ).pack(pady=(25, 10))
-
-        ctk.CTkLabel(
-            dialog,
-            text=f"{num_files} file(s) processed successfully.",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-        ).pack(pady=5)
-
-        ctk.CTkLabel(
-            dialog,
-            text=f"\U0001f4c1  {output_dir}",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color="gray60",
-            wraplength=400,
-        ).pack(pady=5)
-
-        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
-        btn_frame.pack(pady=15)
-
-        ctk.CTkButton(
-            btn_frame, text="Open Folder", width=130,
-            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
-            fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            command=lambda: self._open_folder(output_dir),
-        ).pack(side="left", padx=8)
-
-        ctk.CTkButton(
-            btn_frame, text="Close", width=100,
-            font=ctk.CTkFont(family="Segoe UI", size=13),
-            fg_color="gray30", hover_color="gray40",
-            command=dialog.destroy,
-        ).pack(side="left", padx=8)
-
-    @staticmethod
-    def _open_folder(path):
-        """Open folder in OS file explorer."""
-        try:
-            if sys.platform == "win32":
-                os.startfile(path)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", path])
-            else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception:
-            pass
-
-    # ── Dashboard Tab ───────────────────────────────────────────────
-
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 3: 📊 VÝSLEDKY & PŘÍPADY (DASHBOARD)
+    # ═══════════════════════════════════════════════════════════════════
     def build_dashboard_tab(self):
         self.tab_dashboard.grid_columnconfigure(0, weight=1)
         self.tab_dashboard.grid_rowconfigure(1, weight=1)
 
-        frame_controls = ctk.CTkFrame(self.tab_dashboard, corner_radius=8)
-        frame_controls.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        # Controls bar
+        ctrl_frame = ctk.CTkFrame(self.tab_dashboard, fg_color=BG_CARD, corner_radius=10)
+        ctrl_frame.grid(row=0, column=0, padx=12, pady=(10, 6), sticky="ew")
 
         ctk.CTkButton(
-            frame_controls, text="Load Results CSV", font=self.font_body,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.browse_csv,
-        ).pack(side="left", padx=10, pady=10)
+            ctrl_frame, text="Načíst CSV výsledků", font=self.font_btn,
+            fg_color=ACCENT_CYAN, hover_color=ACCENT_CYAN_HOVER,
+            command=self.browse_csv
+        ).pack(side="left", padx=12, pady=10)
 
-        ctk.CTkLabel(
-            frame_controls, text="Metric:", font=self.font_body
-        ).pack(side="left", padx=(15, 5))
+        ctk.CTkLabel(ctrl_frame, text="Zobrazit metriku v grafu:", font=self.font_body).pack(side="left", padx=(15, 6))
 
         self.metric_var = ctk.StringVar(value="ATT_mm")
         self.opt_metric = ctk.CTkOptionMenu(
-            frame_controls, variable=self.metric_var,
-            values=[
-                "ATT_mm", "acl_volume_mm3", "Tortuosity_Index",
-                "notch_width_mm", "Staubli_Tibial_pct",
-                "BH_Length_pct", "BH_Depth_pct",
-            ],
+            ctrl_frame, variable=self.metric_var,
+            values=["ATT_mm", "Staubli_Tibial_pct", "BH_Length_pct", "BH_Depth_pct", "angle_to_plateau_deg", "acl_volume_mm3", "Tortuosity_Index", "notch_width_mm"],
             font=self.font_small, command=self.update_graph,
         )
-        self.opt_metric.pack(side="left", padx=5)
+        self.opt_metric.pack(side="left", padx=6)
 
         ctk.CTkButton(
-            frame_controls, text="\U0001f4c2 Open Folder", font=self.font_body,
-            fg_color="gray30", hover_color="gray40",
-            command=self._open_results_folder,
-        ).pack(side="right", padx=10, pady=10)
+            ctrl_frame, text="📂 Otevřít složku", font=self.font_body,
+            fg_color=BG_CARD_LIGHT, hover_color=BORDER_COLOR,
+            command=self._open_results_folder
+        ).pack(side="right", padx=12, pady=10)
 
-        self.frame_graph = ctk.CTkFrame(self.tab_dashboard, corner_radius=8)
-        self.frame_graph.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+        # Content: Split into Table of cases and Graph
+        content_frame = ctk.CTkFrame(self.tab_dashboard, fg_color="transparent")
+        content_frame.grid(row=1, column=0, padx=12, pady=6, sticky="nsew")
+        content_frame.grid_columnconfigure(0, weight=3)
+        content_frame.grid_columnconfigure(1, weight=2)
+        content_frame.grid_rowconfigure(0, weight=1)
 
-        frame_viz = ctk.CTkFrame(self.tab_dashboard, corner_radius=8)
-        frame_viz.grid(row=2, column=0, padx=10, pady=(5, 10), sticky="ew")
+        # Left: Table of cases with 1-click 3D buttons
+        table_frame = ctk.CTkFrame(content_frame, fg_color=BG_CARD, corner_radius=10)
+        table_frame.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
+        table_frame.grid_rowconfigure(1, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            frame_viz, text="3D Preview:", font=self.font_body
-        ).pack(side="left", padx=(15, 5), pady=10)
+        ctk.CTkLabel(table_frame, text="📋 Zpracované případy (Klikněte na 👁 3D pro okamžité otevření)", font=self.font_title, text_color=TEXT_MAIN).grid(row=0, column=0, padx=15, pady=(10, 6), sticky="w")
 
-        self.viz_scan_var = ctk.StringVar()
-        self.opt_scan = ctk.CTkOptionMenu(
-            frame_viz, variable=self.viz_scan_var, values=[],
-            font=self.font_small,
-        )
-        self.opt_scan.pack(side="left", padx=5)
+        self.cases_scroll = ctk.CTkScrollableFrame(table_frame, fg_color="transparent")
+        self.cases_scroll.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
 
-        self.btn_show_3d = ctk.CTkButton(
-            frame_viz, text="Show 3D", font=self.font_body,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=self.show_3d,
-        )
-        self.btn_show_3d.pack(side="left", padx=10)
+        # Right: Trend graph
+        self.frame_graph = ctk.CTkFrame(content_frame, fg_color=BG_CARD, corner_radius=10)
+        self.frame_graph.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
 
         self.df_patient = None
         self.current_csv_dir = ""
 
     def _open_results_folder(self):
         if self.current_csv_dir and os.path.isdir(self.current_csv_dir):
-            self._open_folder(self.current_csv_dir)
+            if sys.platform == "win32":
+                os.startfile(self.current_csv_dir)
+            else:
+                subprocess.Popen(["xdg-open", self.current_csv_dir])
         else:
-            messagebox.showinfo("Info", "No results loaded yet.")
+            messagebox.showinfo("Informace", "Zatím není načtena žádná složka s výsledky.")
 
     def browse_csv(self):
         path = filedialog.askopenfilename(
-            title="Select patient results CSV",
-            filetypes=[("CSV", "*.csv")],
+            title="Vyberte CSV soubor s výsledky",
+            filetypes=[("CSV soubory", "*.csv")],
         )
         if path:
             self.load_dashboard_data(path)
@@ -661,216 +776,140 @@ class App(ctk.CTk):
     def load_dashboard_data(self, csv_path):
         try:
             import pandas as pd
-        except ImportError:
-            messagebox.showerror("Error", "pandas is required for the dashboard.")
-            return
-
-        if not os.path.exists(csv_path):
-            return
-
-        try:
             self.df_patient = pd.read_csv(csv_path)
             self.current_csv_dir = os.path.dirname(csv_path)
 
-            if "Filename" in self.df_patient.columns:
-                scans = self.df_patient["Filename"].tolist()
-                self.opt_scan.configure(values=scans)
-                if scans:
-                    self.viz_scan_var.set(scans[-1])
+            # Clear existing table
+            for widget in self.cases_scroll.winfo_children():
+                widget.destroy()
+
+            # Populate table rows
+            for idx, row in self.df_patient.iterrows():
+                fname = str(row.get("Filename", f"Case_{idx}"))
+                att = row.get("ATT_mm", 0)
+                stb = row.get("Staubli_Tibial_pct", 0)
+                bh = row.get("BH_Length_pct", 0)
+
+                row_frame = ctk.CTkFrame(self.cases_scroll, fg_color=BG_INPUT, corner_radius=6)
+                row_frame.pack(fill="x", pady=4, padx=2)
+
+                ctk.CTkLabel(row_frame, text=fname[:24], font=self.font_body_bold, width=170, anchor="w").pack(side="left", padx=8, pady=6)
+                ctk.CTkLabel(row_frame, text=f"ATT: {att:.1f} mm", font=self.font_small, text_color=ACCENT_CYAN, width=90).pack(side="left", padx=4)
+                ctk.CTkLabel(row_frame, text=f"Stäubli: {stb:.1f}%", font=self.font_small, text_color=TEXT_MUTED, width=90).pack(side="left", padx=4)
+
+                # Direct 1-click 3D button!
+                btn_3d = ctk.CTkButton(
+                    row_frame, text="👁 3D", width=65, height=26, font=self.font_small,
+                    fg_color=ACCENT_CYAN, hover_color=ACCENT_CYAN_HOVER,
+                    command=lambda fn=fname: self.open_case_3d(fn)
+                )
+                btn_3d.pack(side="right", padx=8, pady=4)
 
             self.update_graph()
         except Exception as e:
-            messagebox.showerror("Error", f"Could not load data:\n{e}")
+            traceback.print_exc()
+            messagebox.showerror("Chyba načtení", f"Nepodařilo se načíst výsledky:\n{e}")
 
-    def update_graph(self, *args):
-        try:
-            import matplotlib.pyplot as plt
-            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-        except ImportError:
+    def open_case_3d(self, filename):
+        """1-click open PyVista 3D viewer for a specific case from the table."""
+        if not self.current_csv_dir:
             return
 
+        mask_candidate = os.path.join(self.current_csv_dir, f"mask_{filename}")
+        if not os.path.exists(mask_candidate):
+            mask_candidate = os.path.join(self.current_csv_dir, filename)
+
+        if os.path.exists(mask_candidate):
+            self.viz_primary_var.set(mask_candidate)
+            self._update_detection_info(mask_candidate)
+            self.tabview.set("🚀 3D Prohlížeč (PyVista)")
+            self.action_launch_pyvista()
+        else:
+            messagebox.showinfo("Soubor nenalezen", f"Maska pro '{filename}' nebyla nalezena ve složce:\n{self.current_csv_dir}")
+
+    def update_graph(self, *args):
         if self.df_patient is None or self.df_patient.empty:
             return
 
-        metric = self.metric_var.get()
-        if metric not in self.df_patient.columns:
-            return
-
-        for widget in self.frame_graph.winfo_children():
-            widget.destroy()
-
-        fig, ax = plt.subplots(figsize=(6, 4), facecolor="#1a1a2e")
-        ax.set_facecolor("#1a1a2e")
-        ax.tick_params(colors="white", labelsize=9)
-        for spine in ax.spines.values():
-            spine.set_color("#333355")
-
-        x_labels = (
-            self.df_patient["Filename"].apply(
-                lambda x: str(x).split("_")[0][:12]
-            )
-            if "Filename" in self.df_patient.columns
-            else self.df_patient.index
-        )
-
-        ax.plot(
-            x_labels, self.df_patient[metric],
-            marker="o", color=ACCENT, linestyle="-",
-            linewidth=2, markersize=8,
-            markerfacecolor=ACCENT_HOVER,
-            markeredgecolor="white", markeredgewidth=1.5,
-        )
-        ax.set_title(
-            f"Trend: {metric}", color="white", fontsize=13, fontweight="bold"
-        )
-        ax.set_ylabel(metric, color="gray", fontsize=10)
-        ax.grid(True, color="#333355", linestyle="--", alpha=0.5)
-
-        fig.autofmt_xdate()
-        fig.tight_layout()
-
-        canvas = FigureCanvasTkAgg(fig, master=self.frame_graph)
-        canvas.draw()
-        canvas.get_tk_widget().pack(fill="both", expand=True)
-
-    def show_3d(self):
         try:
-            import mri_pipeline
-        except ImportError:
-            messagebox.showerror("Error", "Pipeline module not available.")
-            return
+            import matplotlib.pyplot as plt
+            from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-        filename = self.viz_scan_var.get()
-        if not filename or not self.current_csv_dir:
-            messagebox.showinfo("Info", "Select a scan first.")
-            return
-
-        # Search for original scan in likely locations
-        search_dirs = [
-            os.path.dirname(mri_pipeline.CONFIG.get("input_path", "")),
-            mri_pipeline.CONFIG.get("input_dir", ""),
-            self.current_csv_dir,
-        ]
-        img_path = ""
-        for d in search_dirs:
-            candidate = os.path.join(d, filename)
-            if os.path.exists(candidate):
-                img_path = candidate
-                break
-
-        if not img_path:
-            messagebox.showinfo(
-                "File Not Found",
-                f"Original scan '{filename}' not found.\n"
-                "Please select it manually.",
-            )
-            img_path = filedialog.askopenfilename(
-                title=f"Select scan: {filename}",
-                filetypes=[("NIfTI", "*.nii.gz *.nii")],
-            )
-            if not img_path:
+            metric = self.metric_var.get()
+            if metric not in self.df_patient.columns:
                 return
 
-        mask_basename = (
-            filename if filename.startswith("mask_") else f"mask_{filename}"
-        )
-        mask_path = os.path.join(self.current_csv_dir, mask_basename)
+            for widget in self.frame_graph.winfo_children():
+                widget.destroy()
 
-        if not os.path.exists(mask_path):
-            messagebox.showerror("Error", f"Mask not found:\n{mask_path}")
-            return
+            fig, ax = plt.subplots(figsize=(5, 3.5), facecolor=BG_CARD)
+            ax.set_facecolor(BG_INPUT)
+            ax.tick_params(colors=TEXT_MUTED, labelsize=8)
+            for spine in ax.spines.values():
+                spine.set_color(BORDER_COLOR)
 
-        ref_path = self.settings["anaknee_ref_mri"]
+            y_vals = self.df_patient[metric]
+            x_vals = range(len(y_vals))
 
-        # Give visual feedback
-        self.btn_show_3d.configure(state="disabled", text="Loading 3D...")
+            ax.plot(
+                x_vals, y_vals, marker="o", color=ACCENT_CYAN,
+                linewidth=2, markersize=6, markerfacecolor=ACCENT_GREEN
+            )
+            ax.set_title(f"Trend: {metric}", color=TEXT_MAIN, fontsize=11, fontweight="bold")
+            ax.grid(True, color=BORDER_COLOR, linestyle="--", alpha=0.4)
 
-        def worker():
-            try:
-                mri_pipeline.run_visualization_only(
-                    img_path, ref_path, mask_path
-                )
-            except Exception as e:
-                self.after(
-                    0,
-                    lambda: messagebox.showerror(
-                        "3D Error", f"Could not open 3D viewer:\n{e}"
-                    ),
-                )
-            finally:
-                # Restore button state
-                self.after(
-                    0,
-                    lambda: self.btn_show_3d.configure(
-                        state="normal", text="Show 3D"
-                    )
-                )
+            fig.tight_layout()
+            canvas = FigureCanvasTkAgg(fig, master=self.frame_graph)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+        except Exception:
+            pass
 
-        threading.Thread(target=worker, daemon=True).start()
-
-    # ── Settings Tab ────────────────────────────────────────────────
-
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 4: ⚙ NASTAVENÍ (SETTINGS)
+    # ═══════════════════════════════════════════════════════════════════
     def build_settings_tab(self):
         self.tab_settings.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            self.tab_settings, text="Pipeline Configuration",
-            font=self.font_title,
+            self.tab_settings, text="Konfigurace modelů a referencí",
+            font=self.font_title, text_color=TEXT_MAIN
         ).grid(row=0, column=0, columnspan=3, padx=15, pady=(15, 10), sticky="w")
 
-        self.sv_ref = ctk.StringVar(
-            value=self.settings.get("anaknee_ref_mri", "")
-        )
-        self.sv_model = ctk.StringVar(
-            value=self.settings.get("model_ckpt", "")
-        )
-        self.sv_ens = ctk.StringVar(
-            value=self.settings.get("ensemble_dir", "")
-        )
-        self.sv_gt = ctk.StringVar(
-            value=self.settings.get("gt_masks_dir", "")
-        )
+        self.sv_ref = ctk.StringVar(value=self.settings.get("anaknee_ref_mri", ""))
+        self.sv_model = ctk.StringVar(value=self.settings.get("model_ckpt", ""))
+        self.sv_ens = ctk.StringVar(value=self.settings.get("ensemble_dir", ""))
+        self.sv_gt = ctk.StringVar(value=self.settings.get("gt_masks_dir", ""))
 
-        self._add_setting_row("Reference MRI:", self.sv_ref, 1)
-        self._add_setting_row("Model Weights:", self.sv_model, 2)
-        self._add_setting_row("Ensemble Folder:", self.sv_ens, 3, is_dir=True)
-        self._add_setting_row("GT Masks Folder:", self.sv_gt, 4, is_dir=True)
+        self._add_setting_row("Referenční MRI:", self.sv_ref, 1)
+        self._add_setting_row("Váhy modelu:", self.sv_model, 2)
+        self._add_setting_row("Složka 5-Fold modelů:", self.sv_ens, 3, is_dir=True)
+        self._add_setting_row("GT masky (validace):", self.sv_gt, 4, is_dir=True)
 
         ctk.CTkButton(
-            self.tab_settings, text="\U0001f4be  Save Settings",
-            font=self.font_button, fg_color=SUCCESS, hover_color=SUCCESS_HOVER,
-            height=38, corner_radius=8, command=self.save_settings_from_ui,
+            self.tab_settings, text="💾  Uložit nastavení",
+            font=self.font_btn, fg_color=ACCENT_GREEN, hover_color=ACCENT_GREEN_HOVER,
+            height=38, corner_radius=8, command=self.save_settings_from_ui
         ).grid(row=5, column=0, columnspan=3, padx=15, pady=20, sticky="ew")
 
     def _add_setting_row(self, label, string_var, row, is_dir=False):
-        ctk.CTkLabel(
-            self.tab_settings, text=label, font=self.font_body,
-        ).grid(row=row, column=0, padx=(15, 5), pady=8, sticky="e")
-
-        ctk.CTkEntry(
-            self.tab_settings, textvariable=string_var, font=self.font_small,
-        ).grid(row=row, column=1, padx=5, pady=8, sticky="ew")
+        ctk.CTkLabel(self.tab_settings, text=label, font=self.font_body).grid(row=row, column=0, padx=(15, 6), pady=8, sticky="e")
+        ctk.CTkEntry(self.tab_settings, textvariable=string_var, font=self.font_small, fg_color=BG_INPUT, border_color=BORDER_COLOR).grid(row=row, column=1, padx=6, pady=8, sticky="ew")
 
         def browse():
-            if is_dir:
-                path = filedialog.askdirectory()
-            else:
-                path = filedialog.askopenfilename()
+            path = filedialog.askdirectory() if is_dir else filedialog.askopenfilename()
             if path:
                 string_var.set(path)
 
-        ctk.CTkButton(
-            self.tab_settings, text="Browse", width=80, font=self.font_body,
-            fg_color=ACCENT, hover_color=ACCENT_HOVER, command=browse,
-        ).grid(row=row, column=2, padx=(5, 15), pady=8)
+        ctk.CTkButton(self.tab_settings, text="Procházet...", width=95, font=self.font_body, fg_color=ACCENT_CYAN, hover_color=ACCENT_CYAN_HOVER, command=browse).grid(row=row, column=2, padx=(6, 15), pady=8)
 
     def save_settings_from_ui(self):
-        self.settings["anaknee_ref_mri"] = self.sv_ref.get()
-        self.settings["model_ckpt"] = self.sv_model.get()
-        self.settings["ensemble_dir"] = self.sv_ens.get()
-        self.settings["gt_masks_dir"] = self.sv_gt.get()
+        self.settings["anaknee_ref_mri"] = self.sv_ref.get().strip()
+        self.settings["model_ckpt"] = self.sv_model.get().strip()
+        self.settings["ensemble_dir"] = self.sv_ens.get().strip()
+        self.settings["gt_masks_dir"] = self.sv_gt.get().strip()
         self.save_settings()
-        messagebox.showinfo("Saved", "Settings have been saved successfully.")
+        messagebox.showinfo("Uloženo", "Nastavení bylo úspěšně uloženo.")
 
 
 if __name__ == "__main__":
