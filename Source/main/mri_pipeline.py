@@ -558,6 +558,9 @@ def process_single_volume(
                     "bh_grid_info": p_info.get("bh_grid_info", {}),
                     "att_info": p_info.get("att_info", {}),
                     "staubli_info": p_info.get("staubli_info", {}),
+                    "plateau_inliers": p_info.get("plateau_inliers"),
+                    "plateau_outliers": p_info.get("plateau_outliers"),
+                    "results_dict": res_dict,
                 }
                 logging.info("  -> Launching PyVista visualization.")
                 visualize_results(mask_array_ana, spacing_zyx, vis_data)
@@ -624,6 +627,9 @@ def run_visualization_only(img_path, ref_path, mask_path):
             "bh_grid_info": p_info.get("bh_grid_info", {}),
             "att_info": p_info.get("att_info", {}),
             "staubli_info": p_info.get("staubli_info", {}),
+            "plateau_inliers": p_info.get("plateau_inliers"),
+            "plateau_outliers": p_info.get("plateau_outliers"),
+            "results_dict": res_dict,
         }
         visualize_results(mask_array_ana, spacing_zyx, vis_data)
     except Exception as e:

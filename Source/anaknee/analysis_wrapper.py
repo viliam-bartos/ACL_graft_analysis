@@ -22,7 +22,10 @@ def run_pipeline(mri_path, mask_path):
         'plateau_center': plane_info['center'],
         'bh_grid_info': plane_info.get('bh_grid_info', {}),
         'att_info': plane_info.get('att_info', {}),
-        'staubli_info': plane_info.get('staubli_info', {})
+        'staubli_info': plane_info.get('staubli_info', {}),
+        'plateau_inliers': plane_info.get('plateau_inliers'),
+        'plateau_outliers': plane_info.get('plateau_outliers'),
+        'results_dict': results_dict,
     }
     
     

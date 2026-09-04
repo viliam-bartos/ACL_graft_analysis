@@ -179,35 +179,78 @@ def match_histograms(img_sitk, ref_path, mask_sitk=None):
     
     return standardized_sitk
 
+class PlaneModel3D:
+    """
+    3D plane model compatible with skimage.measure.ransac.
+    
+    A plane is defined by a point on the plane (centroid) and a unit normal vector.
+    The model can be estimated from >= 3 non-collinear points using SVD.
+    """
+    
+    def __init__(self):
+        self.normal = None
+        self.centroid = None
+    
+    def estimate(self, data):
+        """Estimate plane parameters from a set of 3D points (N x 3).
+        
+        Returns True if estimation was successful, False otherwise.
+        """
+        if data.shape[0] < 3:
+            return False
+        
+        self.centroid = data.mean(axis=0)
+        centered = data - self.centroid
+        
+        try:
+            _, s, vh = np.linalg.svd(centered, full_matrices=False)
+            # Check for degenerate case: collinear points have rank < 2,
+            # meaning the second singular value is near zero.
+            # (Three coplanar points are NOT degenerate — they define a valid plane.)
+            if s[1] / (s[0] + 1e-12) < 1e-10:
+                return False
+            self.normal = vh[-1, :]
+            self.normal = self.normal / np.linalg.norm(self.normal)
+            return True
+        except np.linalg.LinAlgError:
+            return False
+    
+    def residuals(self, data):
+        """Compute signed perpendicular distances from points to the plane."""
+        return np.abs((data - self.centroid).dot(self.normal))
+
+
 def get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=None, top_fraction=0.25):
     """
-    Robust estimation of the tibial plateau plane using iterative refinement.
+    Robust estimation of the tibial plateau plane using RANSAC.
 
-    - Avoids PCA on the whole tibia, which fails when the mask is wider than it is long.
-    - Starts with an initial vertical guess (or the vector to the proximal point).
-    - Iteratively selects the top fraction of voxels along the current axis and fits a plane
-      to those points to refine the axis.
+    Strategy:
+    1. Iteratively selects the proximal fraction of tibia voxels (plateau region).
+    2. Applies RANSAC to fit a plane that is robust to anatomical outliers
+       (tibial spine, osteophytes, posterior slope irregularities).
+    3. Falls back to standard SVD fit if RANSAC fails.
       
     Args:
         tibia_mask (np.ndarray): boolean mask of tibia voxels (in voxel coords)
         spacing (tuple): voxel spacing (sz, sy, sx) in mm
-        proximal_point (iterable, optional): physical coordinate (x,y,z) pointing towards femur
+        proximal_point (iterable, optional): physical coordinate (z,y,x) pointing towards femur
         top_fraction (float): fraction of voxels to take from the proximal end
 
     Returns:
         normal (np.ndarray): unit normal vector of the fitted plateau plane (physical coords)
         centroid (np.ndarray): physical centroid of the selected plateau points
+        inlier_points (np.ndarray): physical coords of RANSAC inliers (N x 3), or None
+        outlier_points (np.ndarray): physical coords of RANSAC outliers (M x 3), or None
     """
     s0, s1, s2 = spacing
     coords = np.argwhere(tibia_mask)
     if len(coords) == 0:
-        return np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 0.0])
+        return np.array([0.0, -1.0, 0.0]), np.array([0.0, 0.0, 0.0]), None, None
 
     phys_coords = coords * np.array([s0, s1, s2])
     mean_all = phys_coords.mean(axis=0)
 
     # 1. Initialize the upward axis
-    # In LIA orientation, dim1 is S-I (positive is down/inferior, so up/superior is negative)
     if proximal_point is not None:
         current_axis = np.array(proximal_point) - mean_all
     else:
@@ -219,45 +262,78 @@ def get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=None, top_fract
     else:
         current_axis = np.array([0.0, -1.0, 0.0])
 
-    # 2. Iterative refinement (3 iterations is enough to converge)
+    # 2. Iterative proximal voxel selection (3 iterations to converge)
     n_top = max(3, int(len(phys_coords) * float(top_fraction)))
     centroid = mean_all
+    top_points = phys_coords
     
     for _ in range(3):
-        # Project all tibia points onto the current upward axis
         projections = phys_coords.dot(current_axis)
-        
-        # Take the voxels with largest projection (the proximal end / plateau)
         top_idx = np.argsort(projections)[-n_top:]
         top_points = phys_coords[top_idx]
         
         centroid = top_points.mean(axis=0)
         centered = top_points - centroid
         
-        # Fit plane to top points
         try:
             _, _, vh = np.linalg.svd(centered, full_matrices=False)
             new_normal = vh[-1, :]
         except Exception:
             new_normal = current_axis
             
-        # Ensure the new normal points in the same general upward direction
         if np.dot(new_normal, current_axis) < 0:
             new_normal = -new_normal
             
-        # Update axis for next iteration
         nrm = np.linalg.norm(new_normal)
         if nrm > 0:
             current_axis = new_normal / nrm
 
-    normal = current_axis
+    # 3. RANSAC robust plane fitting on the selected plateau points
+    inlier_points = None
+    outlier_points = None
+    
+    if len(top_points) >= 10:
+        try:
+            model, inlier_mask = ransac(
+                top_points,
+                PlaneModel3D,
+                min_samples=3,
+                residual_threshold=1.5,  # mm — typical cortical surface tolerance
+                max_trials=1000,
+            )
+            
+            n_inliers = np.sum(inlier_mask)
+            inlier_ratio = n_inliers / len(top_points)
+            
+            if model is not None and model.normal is not None and inlier_ratio > 0.3:
+                normal = model.normal.copy()
+                centroid = model.centroid.copy()
+                inlier_points = top_points[inlier_mask]
+                outlier_points = top_points[~inlier_mask]
+                
+                logging.info(
+                    f"  -> RANSAC plateau fit: {n_inliers}/{len(top_points)} inliers "
+                    f"({inlier_ratio:.1%})"
+                )
+            else:
+                logging.warning(
+                    f"  -> RANSAC inlier ratio too low ({inlier_ratio:.1%}), "
+                    f"falling back to SVD."
+                )
+                normal = current_axis
+        except Exception as e:
+            logging.warning(f"  -> RANSAC failed ({e}), falling back to SVD.")
+            normal = current_axis
+    else:
+        logging.info("  -> Too few plateau points for RANSAC, using SVD fit.")
+        normal = current_axis
 
     # Orient normal strictly towards proximal_point (femur) if available
     if proximal_point is not None:
         if np.dot(normal, np.array(proximal_point) - centroid) < 0:
             normal = -normal
 
-    return normal, centroid
+    return normal, centroid, inlier_points, outlier_points
 
 def get_bernard_hertel_grid(femur_mask, fem_vox, tib_vox, spacing_zyx, acl_center_dim0=None):
     sz, sy, sx = spacing_zyx
@@ -498,7 +574,9 @@ def analyze_acl_orientation(femur_centroid, tibia_centroid, mask_array, spacing)
     
     tibia_mask = (mask_array == 3)
     # Use femur centroid (p_f) as proximal reference so 'top' is defined anatomically
-    plane_normal, centroid = get_tibial_plateau_plane(tibia_mask, spacing, proximal_point=p_f)
+    plane_normal, centroid, plateau_inliers, plateau_outliers = get_tibial_plateau_plane(
+        tibia_mask, spacing, proximal_point=p_f
+    )
     
     # Calculate elevation angle relative to the plane
     angle_to_normal_rad = np.arccos(np.clip(np.abs(np.dot(acl_vector_norm, plane_normal)), -1.0, 1.0))
@@ -533,7 +611,9 @@ def analyze_acl_orientation(femur_centroid, tibia_centroid, mask_array, spacing)
         "sagittal_angle_deg": sagittal_angle,
         "coronal_angle_deg": coronal_angle,
         "plateau_normal": plane_normal,
-        "plateau_center": centroid
+        "plateau_center": centroid,
+        "plateau_inliers": plateau_inliers,
+        "plateau_outliers": plateau_outliers,
     }
 
 # =============================================================================
@@ -913,7 +993,9 @@ def run_analysis(img_path, ref_path, mask_path):
     plane_info = {
         "normal": orientation_metrics.get("plateau_normal", np.array([0.0, 1.0, 0.0])),
         "center": orientation_metrics.get("plateau_center", np.array([0.0, 0.0, 0.0])),
-        "bh_grid_info": bh_grid_info
+        "bh_grid_info": bh_grid_info,
+        "plateau_inliers": orientation_metrics.get("plateau_inliers"),
+        "plateau_outliers": orientation_metrics.get("plateau_outliers"),
     }
     
     # Module 6: Advanced Geometric Features
